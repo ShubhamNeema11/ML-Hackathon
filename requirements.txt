@@ -1,0 +1,28 @@
+# Business Entity Resolution pipeline - tested with Python 3.11.4 on Windows 11
+# GPU build of torch (CUDA 12.4) was used for embedding fine-tuning/search; install it with:
+#   pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cu124
+# then: pip install -r requirements.txt
+torch==2.6.0
+
+# data handling
+polars==1.44.2
+numpy==1.26.4
+pyarrow==24.0.0
+
+# text normalization
+ftfy==6.3.1
+regex==2025.11.3
+Unidecode==1.4.0
+
+# dense retrieval (multilingual-e5-small, MIT licence) - fine-tuning and search
+sentence-transformers==6.1.0
+transformers==5.17.0
+datasets==5.0.1
+accelerate==1.15.0
+
+# ranking
+lightgbm==4.7.0
+RapidFuzz==3.14.6
+
+# utilities
+psutil==7.1.3
