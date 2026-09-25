@@ -6,7 +6,7 @@ Text = native-script normalized name | normalized address, so the model sees the
 Usage:
   python embed.py train                 fine-tune on (S2/S3 record, S1 owner) pairs, held-out S1 excluded
   python embed.py eval                  recall@k on the same held-out queries as `block.py eval`, + union with sparse
-  python embed.py search train|test     full run -> normalized/[test_]candidates_dense.parquet
+  python embed.py search train|test     -> normalized/cand/{train,test}_dense/ (top-10 per query)
 """
 import sys
 import time
@@ -16,7 +16,7 @@ import numpy as np
 import polars as pl
 import torch
 
-from block import NORM, ROOT, TOP_K, ground_truth, is_val_s1, recall_report
+from block import EVAL_K, NORM, ROOT, TOP_K, ground_truth, is_val_s1, recall_report
 
 BASE_MODEL = "intfloat/multilingual-e5-small"
 MODEL_DIR = ROOT / "models" / "e5_er"
@@ -40,7 +40,8 @@ def train():
     pairs = ground_truth().filter(~is_val_s1())
     # one record per S1 entity per sample -> no duplicate positives inside a batch
     pairs = pairs.sample(fraction=1.0, shuffle=True, seed=0).unique("s1", keep="first").head(N_TRAIN)
-    t = pl.concat([texts("train", i) for i in (1, 2, 3)]).select("entity_id", "text")
+    need = pl.concat([pairs.select(pl.col("rec").alias("entity_id")), pairs.select(pl.col("s1").alias("entity_id"))]).unique()
+    t = pl.concat([texts("train", i).join(need, on="entity_id", how="semi") for i in (1, 2, 3)]).select("entity_id", "text")
     df = (pairs.join(t.rename({"entity_id": "rec", "text": "anchor"}), on="rec")
                .join(t.rename({"entity_id": "s1", "text": "positive"}), on="s1").select("anchor", "positive"))
     print(f"training pairs: {df.height:,}", flush=True)
@@ -68,31 +69,46 @@ def encode(model, txt: list[str]) -> torch.Tensor:
     return out
 
 
-def search(s1: pl.DataFrame, q: pl.DataFrame, model, top_k: int = TOP_K) -> pl.DataFrame:
-    """Exact top-k cosine per country on GPU. (rec, s1, dense_score, dense_rank)."""
+Q_CHUNK = 200_000
+
+
+def search(s1: pl.DataFrame, queries, model, top_k: int = TOP_K, out_dir: Path | None = None):
+    """Exact top-k cosine per country on GPU -> (rec, s1, dense_score, dense_rank).
+    `queries(country)` yields query chunks (DataFrames with entity_id, text) so the 10M-record query table is
+    never held in memory. S1 of a country is encoded once. With out_dir each chunk is written as a parquet part."""
     out = []
-    for c in q["country"].unique().to_list():
+    if out_dir:
+        out_dir.mkdir(parents=True, exist_ok=True)
+    part = 0
+    for c in sorted(s1["country"].unique().to_list()):
         s = s1.filter(pl.col("country") == c)
-        qq = q.filter(pl.col("country") == c)
-        if s.height == 0 or qq.height == 0:
-            continue
         t = time.time()
         es = encode(model, s["text"].to_list())
-        eq = encode(model, qq["text"].to_list())
-        print(f"  {c}: encoded S1={s.height:,} q={qq.height:,} in {time.time() - t:.0f}s", flush=True)
-        k = min(top_k, s.height)
-        sc, ix = [], []
-        for i in range(0, eq.shape[0], 512):
-            v, j = torch.topk(eq[i:i + 512] @ es.T, k, dim=1)
-            sc.append(v.float().cpu()); ix.append(j.cpu())
-        sc, ix = torch.cat(sc).numpy(), torch.cat(ix).numpy()
         sid = s["entity_id"].to_numpy()
-        out.append(pl.DataFrame({
-            "rec": np.repeat(qq["entity_id"].to_numpy(), k), "s1": sid[ix.ravel()],
-            "dense_score": sc.ravel(), "dense_rank": np.tile(np.arange(1, k + 1, dtype=np.uint16), qq.height)}))
-        del es, eq
+        k = min(top_k, s.height)
+        print(f"  {c}: S1={s.height:,} encoded in {time.time() - t:.0f}s", flush=True)
+        done = 0
+        for qq in queries(c):
+            eq = encode(model, qq["text"].to_list())
+            sc, ix = [], []
+            for j in range(0, eq.shape[0], 128):
+                v, jx = torch.topk(eq[j:j + 128] @ es.T, k, dim=1)
+                sc.append(v.float().cpu()); ix.append(jx.cpu())
+            sc, ix = torch.cat(sc).numpy(), torch.cat(ix).numpy()
+            df = pl.DataFrame({
+                "rec": np.repeat(qq["entity_id"].to_numpy(), k), "s1": sid[ix.ravel()],
+                "dense_score": sc.ravel(), "dense_rank": np.tile(np.arange(1, k + 1, dtype=np.uint16), qq.height)})
+            if out_dir is None:
+                out.append(df)
+            else:
+                df.write_parquet(out_dir / f"part{part:04d}.parquet")
+                part += 1
+                done += qq.height
+                print(f"    {c} {done:,} queries  {time.time() - t:.0f}s", flush=True)
+            del eq
+        del es
         torch.cuda.empty_cache()
-    return pl.concat(out)
+    return pl.concat(out) if out_dir is None else None
 
 
 def load_model():
@@ -111,9 +127,9 @@ if __name__ == "__main__":
         t0 = time.time()
         s1 = texts("train", 1)
         qid = pl.read_parquet(NORM / "eval_queries.parquet")
-        q = pl.concat([texts("train", 2), texts("train", 3)]).join(qid, on="entity_id", how="semi")
+        q = pl.concat([texts("train", i).join(qid, on="entity_id", how="semi") for i in (2, 3)])
         truth = ground_truth().filter(is_val_s1()).join(qid.rename({"entity_id": "rec"}), on="rec", how="semi")
-        dense = search(s1, q, load_model())
+        dense = search(s1, lambda c: [q.filter(pl.col("country") == c)], load_model(), top_k=EVAL_K)
         print(f"dense search {time.time() - t0:.0f}s", flush=True)
         dense.write_parquet(NORM / "eval_dense.parquet")
         sparse = pl.read_parquet(NORM / "eval_sparse.parquet")
@@ -125,8 +141,17 @@ if __name__ == "__main__":
             hit = truth.join(u, on=["rec", "s1"], how="semi").height / truth.height
             print(f"union top{k:>2} each: recall {hit:.4f}   cands/query {u.height / q.height:.1f}", flush=True)
     elif cmd == "search":
+        # train: the ranker-training queries chosen by `block.py train`; test: every test query
         split = sys.argv[2]
         s1 = texts(split, 1)
-        q = pl.concat([texts(split, 2), texts(split, 3)])
-        dense = search(s1, q, load_model())
-        dense.write_parquet(NORM / f"{'test_' if split == 'test' else ''}candidates_dense.parquet")
+        keep = pl.read_parquet(NORM / "train_queries.parquet") if split == "train" else None
+
+        def queries(country):
+            for n in (2, 3):  # one source at a time
+                d = texts(split, n).filter(pl.col("country") == country)
+                if keep is not None:
+                    d = d.join(keep, on="entity_id", how="semi")
+                for i in range(0, d.height, Q_CHUNK):
+                    yield d.slice(i, Q_CHUNK)
+
+        search(s1, queries, load_model(), out_dir=NORM / "cand" / f"{split}_dense")

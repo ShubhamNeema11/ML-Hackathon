@@ -16,6 +16,7 @@ Usage:
   python block.py train|test          full run -> normalized/[test_]candidates_sparse.parquet
 """
 import os
+import os
 import sys
 import time
 from pathlib import Path
@@ -24,11 +25,13 @@ import polars as pl
 
 ROOT = Path(os.environ.get("ER_ROOT", Path(__file__).parent))  # where normalized/ and models/ live
 NORM = ROOT / "normalized"
-DATASET = Path(r"C:\Users\Lenovo\Downloads\6ab10eb3b23ba_student_resource\student_resource\dataset")
-TOP_K = 30
+DATASET = Path(os.environ.get("ER_DATASET", r"C:\Users\Lenovo\Downloads\6ab10eb3b23ba_student_resource\student_resource\dataset"))
+TOP_K = 10  # per channel: union of sparse+dense top-10 = 99.2% held-out recall at ~18 cands/record
+EVAL_K = 30
 NGRAM_SPAN = 28  # 4-grams from the first 31 characters of the compact name
 MAX_DF = 400  # S1 keys shared by more entities than this are too generic to join on (they still count in norms)
-CHUNK = 50_000
+CHUNK = int(os.environ.get("ER_CHUNK", 50_000))  # queries per search chunk; also the part-file granularity
+INDEX_SLICE = 200_000  # S1 rows keyed at a time when building the index (bounds peak memory)
 COLS = ["entity_id", "country", "name_core", "addr_latin", "city", "state"]
 
 _LEGAL_RE = r"\b(pvt|ltd|llc|llp|lp|inc|corp|co|plc|pc|opc|sarl|sas|sasu|sa|eurl|sci|snc|ei|and|the|of|et)\b"
@@ -38,6 +41,12 @@ _HONORIFIC_RE = r"^(shri|sri|shree|smt|mr|mrs|ms|m s|messrs|dr)\b"
 def load(split: str, n: int) -> pl.DataFrame:
     prefix = "" if split == "train" else "test_"
     return pl.read_parquet(NORM / f"{prefix}source{n}.parquet", columns=COLS)
+
+
+def load_queries(split: str) -> pl.LazyFrame:
+    """S2 then S3 records, lazily: chunks are read one at a time instead of holding 10M rows."""
+    prefix = "" if split == "train" else "test_"
+    return pl.concat([pl.scan_parquet(NORM / f"{prefix}source{i}.parquet").select(COLS) for i in (2, 3)])
 
 
 def ground_truth() -> pl.DataFrame:
@@ -52,11 +61,11 @@ def is_val_s1(col: str = "s1") -> pl.Expr:
     return pl.col(col).hash(seed=7) % 10 == 0
 
 
-def eval_queries(q: pl.DataFrame, pairs: pl.DataFrame, frac: float) -> tuple[pl.DataFrame, pl.DataFrame]:
+def eval_queries(q: pl.LazyFrame, pairs: pl.DataFrame, frac: float) -> tuple[pl.DataFrame, pl.DataFrame]:
     """Sampled queries owned by held-out S1 entities, plus orphans. Returns (queries, truth)."""
-    q = q.join(pairs, left_on="entity_id", right_on="rec", how="left")
+    q = q.join(pairs.lazy(), left_on="entity_id", right_on="rec", how="left")
     samp = pl.col("entity_id").hash(seed=11) % 100_000 < int(frac * 100_000)
-    q = q.filter((is_val_s1() | pl.col("s1").is_null()) & samp).drop("s1")
+    q = q.filter((is_val_s1() | pl.col("s1").is_null()) & samp).drop("s1").collect()
     truth = pairs.filter(is_val_s1()).join(q.select(pl.col("entity_id").alias("rec")), on="rec", how="semi")
     return q, truth
 
@@ -71,7 +80,7 @@ def skeleton(e: pl.Expr) -> pl.Expr:
 
 
 def keys(df: pl.DataFrame) -> pl.DataFrame:
-    """Explode records into (entity_id, key) rows."""
+    """Explode records into (row, key-hash) rows; row is the position inside df."""
     name = (pl.col("name_core").str.to_lowercase().str.replace_all(_HONORIFIC_RE, " ")
               .str.replace_all(_LEGAL_RE, " ").str.replace_all(r"\s+", " ").str.strip_chars())
     toks = name.str.split(" ")
@@ -102,30 +111,50 @@ def keys(df: pl.DataFrame) -> pl.DataFrame:
         pl.concat_list([toks.list.first() + "|" + first_word]).list.eval(("z:" + pl.element()).drop_nulls()),
     ]
     allk = pl.concat_list(parts).list.unique().alias("key")
-    return (df.select("entity_id", pl.col("country").alias("c"), allk).explode("key").drop_nulls("key")
-              .select("entity_id", (pl.col("c") + "|" + pl.col("key")).alias("key")))
+    return (df.with_row_index("row").select("row", pl.col("country").alias("c"), allk).explode("key").drop_nulls("key")
+              .select("row", (pl.col("c") + "|" + pl.col("key")).hash(seed=0).alias("key")))  # UInt64: ~4x smaller than strings
 
 
 class SparseIndex:
-    def __init__(self, s1: pl.DataFrame):
-        k1 = keys(s1)
-        df = k1.group_by("key").len().rename({"len": "df"})
-        df = df.with_columns((pl.lit(s1.height).log() - pl.col("df").log()).alias("idf"))
-        self.norm = (k1.join(df, on="key").group_by("entity_id")
-                       .agg((pl.col("idf") ** 2).sum().sqrt().alias("nrm")).rename({"entity_id": "s1"}))
-        self.post = (k1.join(df.filter(pl.col("df") <= MAX_DF), on="key")
-                       .select(pl.col("entity_id").alias("s1"), "key", "idf"))
+    """IDF-weighted key index over S1. Keys are 64-bit hashes and S1 records are row numbers, so 2.2M records
+    x ~34 keys stay around 1-2 GB (strings would need >10 GB)."""
 
-    def search(self, q: pl.DataFrame, top_k: int = TOP_K) -> pl.DataFrame:
-        """(rec, s1, sparse_score, sparse_rank) for the top-k S1 candidates of every query."""
+    def __init__(self, s1: pl.DataFrame):
+        self.ids = s1["entity_id"]
+        k1 = pl.concat([keys(s1.slice(i, INDEX_SLICE)).with_columns(pl.col("row") + i)
+                        for i in range(0, s1.height, INDEX_SLICE)])
+        df = k1.group_by("key").len().rename({"len": "df"})
+        df = df.with_columns((pl.lit(s1.height).log() - pl.col("df").log()).cast(pl.Float32).alias("idf"))
+        self.norm = (k1.join(df, on="key").group_by("row")
+                       .agg((pl.col("idf") ** 2).sum().sqrt().alias("nrm")).rename({"row": "s1_row"}))
+        self.post = k1.join(df.filter(pl.col("df") <= MAX_DF), on="key").select(pl.col("row").alias("s1_row"), "key", "idf")
+
+    def search_chunk(self, q: pl.DataFrame, top_k: int) -> pl.DataFrame:
+        j = (keys(q).join(self.post, on="key")
+             .group_by("row", "s1_row").agg((pl.col("idf") ** 2).sum().alias("w"))
+             .join(self.norm, on="s1_row").select("row", "s1_row", (pl.col("w") / pl.col("nrm")).alias("sparse_score")))
+        j = j.sort("sparse_score", descending=True).group_by("row", maintain_order=True).head(top_k)
+        j = j.with_columns(pl.int_range(1, pl.len() + 1).over("row").cast(pl.UInt16).alias("sparse_rank"))
+        return j.select(pl.Series("rec", q["entity_id"].gather(j["row"].to_numpy())),
+                        pl.Series("s1", self.ids.gather(j["s1_row"].to_numpy())), "sparse_score", "sparse_rank")
+
+    def search(self, q: pl.DataFrame | pl.LazyFrame, top_k: int = TOP_K, out_dir: Path | None = None) -> pl.DataFrame | None:
+        """(rec, s1, sparse_score, sparse_rank) of the top-k S1 candidates per query record.
+        With out_dir every chunk becomes its own parquet part and nothing is kept in memory."""
+        q = q.lazy()
+        n_rows = q.select(pl.len()).collect().item()
         out = []
-        for i in range(0, q.height, CHUNK):
-            j = (keys(q.slice(i, CHUNK)).rename({"entity_id": "rec"}).join(self.post, on="key")
-                 .group_by("rec", "s1").agg((pl.col("idf") ** 2).sum().alias("w"))
-                 .join(self.norm, on="s1").select("rec", "s1", (pl.col("w") / pl.col("nrm")).alias("sparse_score")))
-            j = j.sort("sparse_score", descending=True).group_by("rec", maintain_order=True).head(top_k)
-            out.append(j.with_columns(pl.int_range(1, pl.len() + 1).over("rec").cast(pl.UInt16).alias("sparse_rank")))
-        return pl.concat(out)
+        if out_dir:
+            out_dir.mkdir(parents=True, exist_ok=True)
+        for n, i in enumerate(range(0, n_rows, CHUNK)):
+            j = self.search_chunk(q.slice(i, CHUNK).collect(), top_k)
+            if out_dir is None:
+                out.append(j)
+                continue
+            j.write_parquet(out_dir / f"part{n:04d}.parquet")
+            if n % 20 == 0:
+                print(f"  sparse {min(i + CHUNK, n_rows):,}/{n_rows:,}", flush=True)
+        return pl.concat(out) if out_dir is None else None
 
 
 def recall_report(cand: pl.DataFrame, truth: pl.DataFrame, rank_col: str, label: str, ks=(1, 5, 10, 20, 30)):
@@ -133,23 +162,40 @@ def recall_report(cand: pl.DataFrame, truth: pl.DataFrame, rank_col: str, label:
     print(f"{label:24s} " + "  ".join(f"@{k}:{(r <= k).mean():.4f}" for k in ks), flush=True)
 
 
+def ranker_train_queries(q: pl.LazyFrame, pairs: pl.DataFrame, frac: float) -> pl.DataFrame:
+    """Queries for ranker training: owned by non-held-out S1, or orphans; disjoint from the eval queries."""
+    q = q.join(pairs.lazy(), left_on="entity_id", right_on="rec", how="left")
+    samp = pl.col("entity_id").hash(seed=13) % 100_000 < int(frac * 100_000)
+    q = q.filter((~is_val_s1() | pl.col("s1").is_null()) & samp).drop("s1").collect()
+    ev = NORM / "eval_queries.parquet"
+    return q.join(pl.read_parquet(ev), on="entity_id", how="anti") if ev.exists() else q
+
+
 if __name__ == "__main__":
+    # eval [frac]      -> eval_sparse.parquet (top EVAL_K) + eval_queries.parquet
+    # train [frac]     -> cand/train_sparse/  ranker-training queries (default 10%)
+    # test             -> cand/test_sparse/   every test query
     mode = sys.argv[1] if len(sys.argv) > 1 else "eval"
     t = time.time()
     split = "test" if mode == "test" else "train"
     s1 = load(split, 1)
-    q = pl.concat([load(split, 2), load(split, 3)])
+    q = load_queries(split)
     if mode == "eval":
         frac = float(sys.argv[2]) if len(sys.argv) > 2 else 0.05
         q, truth = eval_queries(q, ground_truth(), frac)
         print(f"eval: full S1={s1.height:,}  queries={q.height:,}  (owned {truth.height:,})", flush=True)
+    elif mode == "train":
+        q = ranker_train_queries(q, ground_truth(), float(sys.argv[2]) if len(sys.argv) > 2 else 0.10)
+        print(f"ranker-train queries: {q.height:,}", flush=True)
+        q.select("entity_id").write_parquet(NORM / "train_queries.parquet")
     idx = SparseIndex(s1)
+    del s1
     print(f"index built {time.time() - t:.0f}s", flush=True)
-    cand = idx.search(q)
-    print(f"searched {time.time() - t:.0f}s -> {cand.height:,} pairs", flush=True)
     if mode == "eval":
+        cand = idx.search(q, top_k=EVAL_K)
         recall_report(cand, truth, "sparse_rank", "sparse")
         cand.write_parquet(NORM / "eval_sparse.parquet")
         q.select("entity_id").write_parquet(NORM / "eval_queries.parquet")
     else:
-        cand.write_parquet(NORM / f"{'test_' if split == 'test' else ''}candidates_sparse.parquet")
+        idx.search(q, out_dir=NORM / "cand" / f"{mode}_sparse")
+    print(f"done {time.time() - t:.0f}s", flush=True)

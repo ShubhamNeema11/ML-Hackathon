@@ -12,6 +12,7 @@ Output columns (per source, written to parquet):
   state, city, postal - parsed from the address ("" when unknown)
   has_addr
 """
+import os
 import sys
 import unicodedata
 from pathlib import Path
@@ -21,8 +22,8 @@ import regex as re  # \p{M} support: Indic vowel signs are combining marks
 import polars as pl
 from unidecode import unidecode
 
-DATASET = Path(r"C:\Users\Lenovo\Downloads\6ab10eb3b23ba_student_resource\student_resource\dataset")
-OUT = Path(__file__).parent / "normalized"
+DATASET = Path(os.environ.get("ER_DATASET", r"C:\Users\Lenovo\Downloads\6ab10eb3b23ba_student_resource\student_resource\dataset"))
+OUT = Path(os.environ.get("ER_ROOT", Path(__file__).parent)) / "normalized"
 
 # ---------------------------------------------------------------- text basics
 _WS = re.compile(r"\s+")
@@ -244,22 +245,36 @@ def _batch(args):
     return run_row_batch(*args)
 
 
-def normalize_source(split: str, n: int, limit: int | None = None, workers: int = 14):
+def normalize_source(split: str, n: int, limit: int | None = None, workers: int | None = None,
+                     slice_rows: int = 500_000) -> Path:
+    """Normalize one source file. Works on 500k-row slices written as temporary parquet parts, so peak memory
+    stays around a few GB regardless of file size; the parts are stitched together with a streaming sink."""
     from multiprocessing import Pool
+    import shutil
+    workers = workers or int(os.environ.get("ER_WORKERS", min(8, os.cpu_count() or 2)))
     df = pl.read_csv(DATASET / split / f"{split}_source{n}.tsv", separator="\t", infer_schema_length=0,
-                     quote_char=None, n_rows=limit).rename(
-        {"business_name": "name_raw", "business_address": "addr_raw"})
-    df = df.with_columns(pl.col("name_raw").fill_null(""), pl.col("addr_raw").fill_null(""),
-                         pl.col("country").fill_null(""))
-    names, addrs, ctry = df["name_raw"].to_list(), df["addr_raw"].to_list(), df["country"].to_list()
+                     quote_char=None, n_rows=limit).rename({"business_name": "name_raw", "business_address": "addr_raw"})
+    df = df.with_columns(pl.col("name_raw").fill_null(""), pl.col("addr_raw").fill_null(""), pl.col("country").fill_null(""))
+    prefix = "" if split == "train" else "test_"
+    path = OUT / f"{prefix}source{n}{'_sample' if limit else ''}.parquet"
+    tmp = OUT / f".tmp_{prefix}{n}"
+    shutil.rmtree(tmp, ignore_errors=True)
+    tmp.mkdir(parents=True)
     step = 50_000
-    chunks = [(names[i:i + step], addrs[i:i + step], ctry[i:i + step]) for i in range(0, len(names), step)]
     with Pool(workers) as pool:
-        parts = pool.map(_batch, chunks)
-    cols = {k: [v for p in parts for v in p[k]] for k in parts[0]}
-    df = df.with_columns([pl.Series(k, v) for k, v in cols.items()])
-    df = df.with_columns((pl.col("addr_norm") != "").alias("has_addr"))
-    return df
+        for k, lo in enumerate(range(0, df.height, slice_rows)):
+            d = df.slice(lo, slice_rows)
+            names, addrs, ctry = d["name_raw"].to_list(), d["addr_raw"].to_list(), d["country"].to_list()
+            chunks = [(names[i:i + step], addrs[i:i + step], ctry[i:i + step]) for i in range(0, len(names), step)]
+            parts = pool.map(_batch, chunks)
+            cols = {c: [v for p in parts for v in p[c]] for c in parts[0]}
+            d = d.with_columns([pl.Series(c, v) for c, v in cols.items()])
+            d.with_columns((pl.col("addr_norm") != "").alias("has_addr")).write_parquet(tmp / f"{k:04d}.parquet")
+            del names, addrs, ctry, chunks, parts, cols, d
+    del df
+    pl.scan_parquet(tmp / "*.parquet").sink_parquet(path)
+    shutil.rmtree(tmp, ignore_errors=True)
+    return path
 
 
 if __name__ == "__main__":
@@ -267,10 +282,7 @@ if __name__ == "__main__":
     OUT.mkdir(exist_ok=True)
     split = sys.argv[1] if len(sys.argv) > 1 else "train"
     limit = int(sys.argv[2]) if len(sys.argv) > 2 else None
-    prefix = "" if split == "train" else "test_"
     for n in (1, 2, 3):
         t = time.time()
-        d = normalize_source(split, n, limit)
-        path = OUT / f"{prefix}source{n}{'_sample' if limit else ''}.parquet"
-        d.write_parquet(path)
-        print(split, n, d.shape, f"{time.time() - t:.0f}s ->", path, flush=True)
+        path = normalize_source(split, n, limit)
+        print(split, n, f"{time.time() - t:.0f}s ->", path, flush=True)
