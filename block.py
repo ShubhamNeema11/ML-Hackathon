@@ -154,6 +154,8 @@ class SparseIndex:
             j.write_parquet(out_dir / f"part{n:04d}.parquet")
             if n % 20 == 0:
                 print(f"  sparse {min(i + CHUNK, n_rows):,}/{n_rows:,}", flush=True)
+        if out_dir is not None:
+            (out_dir / "_DONE").touch()  # marks a complete run for main.py
         return pl.concat(out) if out_dir is None else None
 
 

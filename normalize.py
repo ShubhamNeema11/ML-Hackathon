@@ -191,6 +191,39 @@ def _norm_segment(seg: str, first: bool) -> str:
     return squash(" ".join(out))
 
 
+# names that are also very common city names: only used as a state when nothing better is present
+_AMBIGUOUS_STATE_NAMES = {"washington"}
+
+
+def _pick_state(segs: list[str], states: dict, codes: set) -> tuple[int, str]:
+    """Index of the address segment that names the state, and its code; (-1, "") if none.
+    Several segments can look like a state ("Washington, Utah", "DC, Washington"): an explicit code beats a full
+    name, and a name that is also a common city (Washington) loses to any other state mention."""
+    best = (9, -1, "")  # (priority, index, code); lower priority wins, earliest index breaks ties
+    for idx, seg in enumerate(segs):
+        seg_c = _POSTAL.sub("", _PUNCT.sub("", seg.replace("-", " ").replace("'", " "))).strip()
+        m = re.fullmatch(r"([a-z]{2})\s*\d{5,6}", seg_c)  # "tx 76102"
+        if seg_c in codes:
+            cand = (0, idx, seg_c)
+        elif m and m.group(1) in codes:
+            cand = (0, idx, m.group(1))
+        elif seg_c in states:
+            cand = (2 if seg_c in _AMBIGUOUS_STATE_NAMES else 1, idx, states[seg_c])
+        else:
+            continue
+        if cand[0] < best[0]:
+            best = cand
+    return best[1], best[2]
+
+
+def parse_state(raw: str | None, country: str) -> str:
+    """State code only (same rule as normalize_address, without the rest of the work)."""
+    s = fix_text(raw)
+    segs = [x.strip() for x in _SPLIT.split(s) if x.strip() and x.strip() not in ("null", "none", "nan", "n/a")]
+    states, codes = COUNTRY_STATES.get((country or "").strip().casefold(), ({}, set()))
+    return _pick_state(segs, states, codes)[1]
+
+
 def normalize_address(raw: str | None, country: str):
     s = fix_text(raw)
     if not s.strip():
@@ -199,23 +232,8 @@ def normalize_address(raw: str | None, country: str):
     postal = postal_m.group(1) if postal_m else ""
     segs = [x.strip() for x in _SPLIT.split(s) if x.strip() and x.strip() not in ("null", "none", "nan", "n/a")]
     states, codes = COUNTRY_STATES.get((country or "").strip().casefold(), ({}, set()))
-    state = ""
-    kept = []
-    for idx, seg in enumerate(segs):
-        seg_c = _PUNCT.sub("", seg.replace("-", " ").replace("'", " ")).strip()
-        seg_c = _POSTAL.sub("", seg_c).strip()
-        if not state and seg_c in states:
-            state = states[seg_c]
-            continue
-        if not state and seg_c in codes:
-            state = seg_c
-            continue
-        # "tx 76102" / "ca 90001"
-        m = re.fullmatch(r"([a-z]{2})\s*\d{5,6}", seg_c)
-        if m and m.group(1) in codes:
-            state = m.group(1)
-            continue
-        kept.append(_norm_segment(seg, idx == 0))
+    state_idx, state = _pick_state(segs, states, codes)
+    kept = [_norm_segment(seg, idx == 0) for idx, seg in enumerate(segs) if idx != state_idx]
     kept = [k for k in kept if k]
     # layouts vary ("street, city, ST" / "city, street, ST"): city = last segment with no digits
     # that does not end in a street word; fall back to the last segment
@@ -249,7 +267,7 @@ def normalize_source(split: str, n: int, limit: int | None = None, workers: int 
                      slice_rows: int = 500_000) -> Path:
     """Normalize one source file. Works on 500k-row slices written as temporary parquet parts, so peak memory
     stays around a few GB regardless of file size; the parts are stitched together with a streaming sink."""
-    from multiprocessing import Pool
+    import multiprocessing as mp
     import shutil
     workers = workers or int(os.environ.get("ER_WORKERS", min(8, os.cpu_count() or 2)))
     df = pl.read_csv(DATASET / split / f"{split}_source{n}.tsv", separator="\t", infer_schema_length=0,
@@ -261,7 +279,7 @@ def normalize_source(split: str, n: int, limit: int | None = None, workers: int 
     shutil.rmtree(tmp, ignore_errors=True)
     tmp.mkdir(parents=True)
     step = 50_000
-    with Pool(workers) as pool:
+    with mp.get_context("spawn").Pool(workers) as pool:
         for k, lo in enumerate(range(0, df.height, slice_rows)):
             d = df.slice(lo, slice_rows)
             names, addrs, ctry = d["name_raw"].to_list(), d["addr_raw"].to_list(), d["country"].to_list()

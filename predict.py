@@ -13,15 +13,18 @@ import sys
 import time
 from pathlib import Path
 
+import json
+import os
+
 import lightgbm as lgb
 import numpy as np
 import polars as pl
 
 from block import CHUNK, NORM, ROOT
-from ranker import FEATURES, MODEL_PATH, TEXT_COLS, merge_channels, retrieval_features, string_features
+from ranker import CE_TAG, DECISION_PATH, MODEL_PATH, add_extras, join_ce, load_extras, merge_channels, read_texts, retrieval_features, string_features
 
-OUT = Path(__file__).parent / "output"
-PRED = NORM / "pred"
+OUT = Path(os.environ.get("ER_OUT", ROOT / "output"))  # ER_OUT: write elsewhere (tests)
+PRED = Path(os.environ.get("ER_PRED", NORM / "pred"))
 
 
 def ids_table() -> pl.DataFrame:
@@ -53,12 +56,26 @@ def score():
     names = ids["entity_id"]
     n_s1 = pl.scan_parquet(NORM / "test_source1.parquet").select(pl.len()).collect().item()
     q_ids = pl.concat([pl.scan_parquet(NORM / f"test_source{i}.parquet").select("entity_id") for i in (2, 3)]).collect()["entity_id"]
-    texts = pl.concat([pl.read_parquet(NORM / f"test_source{i}.parquet", columns=TEXT_COLS) for i in (1, 2, 3)])
+    texts = pl.concat([read_texts("test_", i) for i in (1, 2, 3)])
     dense = load_dense(ids)
     dense_rec = dense["rec_i"]
+    extras = load_extras("test")
+    print(f"name-only extras: {0 if extras is None else extras.height:,} rows", flush=True)
     model = lgb.Booster(model_file=str(MODEL_PATH))
-    PRED.mkdir(exist_ok=True)
+    cols = model.feature_name()  # works for the old 28/29-feature models and the new ones alike
+    ce = pl.read_parquet(NORM / f"ce_test{CE_TAG}.parquet") if os.environ.get("ER_CE", "0") == "1" and (NORM / f"ce_test{CE_TAG}.parquet").exists() else None
+    if any(c.startswith("ce_") for c in cols) and ce is None:  # the model was trained with cross-encoder features
+        raise SystemExit(f"{MODEL_PATH.name} uses cross-encoder features: set ER_CE=1 and provide normalized/ce_test{CE_TAG}.parquet "
+                         "(python crossenc.py score test); scoring without them would silently degrade the predictions")
+    if ce is not None and not any(c.startswith("ce_") for c in cols):
+        print("note: cross-encoder scores exist but this model does not use them", flush=True)
+    print(f"model {MODEL_PATH.name}: {len(cols)} features; cross-encoder scores: {'yes' if ce is not None else 'no'}", flush=True)
+    PRED.mkdir(parents=True, exist_ok=True)
     n_parts = -(-len(q_ids) // CHUNK)
+    n_sparse = len(list((NORM / "cand" / "test_sparse").glob("part*.parquet")))
+    if n_sparse != n_parts:  # part n of the sparse candidates must cover the same records as chunk n here
+        raise SystemExit(f"{n_sparse} sparse candidate parts but {n_parts} scoring chunks: ER_CHUNK={CHUNK} differs from the value "
+                         "used by `block.py test`; use the same ER_CHUNK for both")
     print(f"{len(q_ids):,} test records in {n_parts} chunks; dense rows {dense.height:,} ({time.time() - t0:.0f}s)", flush=True)
     id_rec = ids.rename({"entity_id": "rec", "idx": "rec_i"})
     id_s1 = ids.rename({"entity_id": "s1", "idx": "s1_i"})
@@ -73,15 +90,18 @@ def score():
         de = de.select(pl.Series("rec", names.gather(de["rec_i"].to_numpy())), pl.Series("s1", names.gather(de["s1_i"].to_numpy())),
                        "dense_score", "dense_rank")
         sp = pl.read_parquet(NORM / "cand" / "test_sparse" / f"part{n:04d}.parquet")
-        c = retrieval_features(merge_channels(sp, de))
+        c = merge_channels(sp, de)
+        ex = None if extras is None else extras.join(c.select("rec").unique(), on="rec", how="semi")
+        c = retrieval_features(add_extras(c, ex))
         need = pl.concat([c.select(pl.col("rec").alias("entity_id")), c.select(pl.col("s1").alias("entity_id"))]).unique()
-        f = string_features(c, texts.join(need, on="entity_id", how="semi"))
-        p = model.predict(f.select(FEATURES).cast(pl.Float32).to_numpy())
+        f = join_ce(string_features(c, texts.join(need, on="entity_id", how="semi")), ce)
+        p = model.predict(f.select(cols).cast(pl.Float32).to_numpy())
         f = (f.select("rec", "s1").with_columns(pl.Series("p", p, dtype=pl.Float32))
               .join(id_rec, on="rec").join(id_s1, on="s1").select("rec_i", "s1_i", "p"))
         f.write_parquet(out)
         if n % 10 == 0:
             print(f"  chunk {n + 1}/{n_parts}  ({time.time() - t0:.0f}s)", flush=True)
+    (PRED / "_DONE").touch()
     print(f"scored ({time.time() - t0:.0f}s)", flush=True)
 
 
@@ -89,8 +109,17 @@ def _write_tsv(df: pl.DataFrame, f):
     f.write(df.write_csv(separator="\t", include_header=False, quote_style="never").encode("utf-8"))
 
 
-def write(threshold: float):
+def write(threshold: float | None = None):
+    """threshold=None -> use the decision rule tuned by ranker.py fit (models/decision.json): a probability threshold
+    per record type (with / without address) and a required margin between the best and the second-best candidate.
+    A number -> the old rule: best candidate per record if p >= threshold."""
     t0 = time.time()
+    dec = None
+    if threshold is None:
+        dec = json.loads(DECISION_PATH.read_text(encoding="utf-8"))
+        print(f"decision rule {dec}", flush=True)
+        n_s1_ = pl.scan_parquet(NORM / "test_source1.parquet").select(pl.len()).collect().item()
+        has_addr = pl.concat([pl.scan_parquet(NORM / f"test_source{i}.parquet").select("has_addr") for i in (2, 3)]).collect()["has_addr"].to_numpy()
     OUT.mkdir(exist_ok=True)
     ids = ids_table()
     names = ids["entity_id"]
@@ -100,9 +129,17 @@ def write(threshold: float):
     for p in parts:
         d = pl.read_parquet(p)
         pairs.append(d.select("s1_i", "rec_i"))
-        best.append(d.sort("p", descending=True).group_by("rec_i", maintain_order=True).head(1))
-    best = pl.concat(best).filter(pl.col("p") >= threshold)
-    print(f"threshold {threshold}: {best.height:,} records assigned an S1 owner ({time.time() - t0:.0f}s)", flush=True)
+        d = d.sort("p", descending=True)
+        best.append(d.group_by("rec_i", maintain_order=True).agg(
+            pl.col("s1_i").first(), pl.col("p").first(), pl.col("p").get(1, null_on_oob=True).fill_null(0.0).alias("p2")))
+    best = pl.concat(best)
+    if dec is None:
+        best = best.filter(pl.col("p") >= threshold)
+    else:
+        adr = has_addr[best["rec_i"].to_numpy() - n_s1_]  # S2/S3 records follow the S1 rows in the id table
+        thr = np.where(adr, dec["thr_addr"], dec["thr_noaddr"])
+        best = best.filter(pl.Series((best["p"].to_numpy() >= thr) & ((best["p"].to_numpy() - best["p2"].to_numpy()) >= dec["margin"])))
+    print(f"{'rule ' + str(dec) if dec else 'threshold ' + str(threshold)}: {best.height:,} records assigned an S1 owner ({time.time() - t0:.0f}s)", flush=True)
 
     def lists(pr: pl.DataFrame) -> pl.DataFrame:
         """S1 index -> comma-separated S2/S3 ids, one row for every S1 entity."""
@@ -136,4 +173,4 @@ if __name__ == "__main__":
     if sys.argv[1] == "score":
         score()
     elif sys.argv[1] == "write":
-        write(float(sys.argv[2]))
+        write(float(sys.argv[2]) if len(sys.argv) > 2 else None)

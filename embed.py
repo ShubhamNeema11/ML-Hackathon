@@ -8,6 +8,7 @@ Usage:
   python embed.py eval                  recall@k on the same held-out queries as `block.py eval`, + union with sparse
   python embed.py search train|test     -> normalized/cand/{train,test}_dense/ (top-10 per query)
 """
+import os
 import sys
 import time
 from pathlib import Path
@@ -49,9 +50,9 @@ def train():
 
     model = SentenceTransformer(BASE_MODEL, device="cuda")
     model.max_seq_length = MAX_LEN
-    loss = CachedMultipleNegativesRankingLoss(model, mini_batch_size=128)  # big effective batch on 6 GB
+    loss = CachedMultipleNegativesRankingLoss(model, mini_batch_size=int(os.environ.get("ER_MINI_BATCH", 128)))  # 128 on a 6 GB card, 512 on 24 GB
     args = SentenceTransformerTrainingArguments(
-        output_dir=str(MODEL_DIR / "ckpt"), num_train_epochs=1, per_device_train_batch_size=512,
+        output_dir=str(MODEL_DIR / "ckpt"), num_train_epochs=1, per_device_train_batch_size=int(os.environ.get("ER_TRAIN_BATCH", 512)),
         learning_rate=5e-5, warmup_ratio=0.05, fp16=True, batch_sampler=BatchSamplers.NO_DUPLICATES,
         logging_steps=100, save_strategy="no", dataloader_num_workers=0, report_to="none")
     SentenceTransformerTrainer(model=model, args=args, train_dataset=ds, loss=loss).train()
@@ -62,7 +63,7 @@ def train():
 def encode(model, txt: list[str]) -> torch.Tensor:
     # sort by length so each batch pads little; restore order afterwards
     order = np.argsort([len(s) for s in txt])
-    emb = model.encode([txt[i] for i in order], batch_size=1024, convert_to_tensor=True,
+    emb = model.encode([txt[i] for i in order], batch_size=int(os.environ.get("ER_ENCODE_BATCH", 1024)), convert_to_tensor=True,
                        normalize_embeddings=True, show_progress_bar=False).half()
     out = torch.empty_like(emb)
     out[torch.as_tensor(order, device=emb.device)] = emb
@@ -70,6 +71,7 @@ def encode(model, txt: list[str]) -> torch.Tensor:
 
 
 Q_CHUNK = 200_000
+SEARCH_BATCH = int(os.environ.get("ER_SEARCH_BATCH", 128))   # queries per GPU matmul: 128 fits a 6 GB card, 1024 a 24 GB card
 
 
 def search(s1: pl.DataFrame, queries, model, top_k: int = TOP_K, out_dir: Path | None = None):
@@ -91,8 +93,8 @@ def search(s1: pl.DataFrame, queries, model, top_k: int = TOP_K, out_dir: Path |
         for qq in queries(c):
             eq = encode(model, qq["text"].to_list())
             sc, ix = [], []
-            for j in range(0, eq.shape[0], 128):
-                v, jx = torch.topk(eq[j:j + 128] @ es.T, k, dim=1)
+            for j in range(0, eq.shape[0], SEARCH_BATCH):
+                v, jx = torch.topk(eq[j:j + SEARCH_BATCH] @ es.T, k, dim=1)
                 sc.append(v.float().cpu()); ix.append(jx.cpu())
             sc, ix = torch.cat(sc).numpy(), torch.cat(ix).numpy()
             df = pl.DataFrame({
@@ -108,6 +110,8 @@ def search(s1: pl.DataFrame, queries, model, top_k: int = TOP_K, out_dir: Path |
             del eq
         del es
         torch.cuda.empty_cache()
+    if out_dir is not None:
+        (out_dir / "_DONE").touch()  # marks a complete run for main.py
     return pl.concat(out) if out_dir is None else None
 
 

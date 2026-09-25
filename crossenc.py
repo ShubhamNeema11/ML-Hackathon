@@ -1,0 +1,171 @@
+"""Optional cross-encoder whose score is one more LightGBM feature (`ER_CE=1` switches the features on).
+
+A cross-encoder reads the two records TOGETHER, so it can see the small differences the false positives hide
+(`B-10` vs `B-9`, an extra word, another legal form) and, trained with hard POSITIVES as well, it also learns which
+differences are only noise (leading zeros, reformatted units) and must not cost a true match.
+
+  python crossenc.py mine               hard positives + hard negatives      -> normalized/cepairs<tag>.parquet
+  python crossenc.py train              fine-tune multilingual-e5-small       -> models/ce_er/
+  python crossenc.py score train|eval|test   score the uncertain band only    -> normalized/ce_<split>.parquet
+
+Selection of what is scored (cheap, and it leaves confident decisions alone):
+  records whose best stage-1 probability lies in the uncertain band, plus records without an address (their extras);
+  for each such record its top-K candidates by stage-1 probability.
+Stage 1 is any saved ranker (ER_STAGE1, default the deployed one); the feature files it needs must exist.
+
+Environment knobs: ER_STAGE1, ER_CE_BAND="0.03,0.9995", ER_CE_TOPK=3, ER_CE_SAMPLE (fraction of train records to mine),
+ER_CE_STEPS (stop training early: smoke test), ER_CE_MODEL_DIR, ER_CE_MAX_PAIRS (scoring cap: smoke test).
+Nothing here is trained by the pipeline until `train` is run explicitly.
+"""
+import math
+import os
+import sys
+import time
+
+import lightgbm as lgb
+import numpy as np
+import polars as pl
+
+from block import NORM, ROOT, ground_truth
+from ranker import CE_TAG, FEAT_TAG, load_extras
+
+BASE_MODEL = "intfloat/multilingual-e5-small"   # MIT licence, 118M parameters
+CE_DIR = ROOT / "models" / os.environ.get("ER_CE_MODEL_DIR", "ce_er")
+STAGE1 = ROOT / "models" / os.environ.get("ER_STAGE1", "ranker_final_backup.txt")
+BAND = tuple(float(x) for x in os.environ.get("ER_CE_BAND", "0.03,0.9995").split(","))
+TOPK = int(os.environ.get("ER_CE_TOPK", 3))
+MAX_LEN = 128
+BATCH = int(os.environ.get("ER_CE_BATCH", 64))              # 64 fits a 6 GB card, 128 a 24 GB card
+SCORE_BATCH = int(os.environ.get("ER_CE_SCORE_BATCH", 256))
+
+
+def stage1_probs(feat: pl.DataFrame) -> np.ndarray:
+    m = lgb.Booster(model_file=str(STAGE1))
+    return m.predict(feat.select(m.feature_name()).cast(pl.Float32).to_numpy())
+
+
+def entity_text(prefix: str, ids: pl.DataFrame) -> pl.DataFrame:
+    """entity_id, text = 'name | address' in the original script (normalized, states appended)."""
+    d = pl.concat([pl.read_parquet(NORM / f"{prefix}source{i}.parquet", columns=["entity_id", "name_norm", "addr_norm"]).join(ids, on="entity_id", how="semi")
+                   for i in (1, 2, 3)])
+    return d.select("entity_id", pl.concat_str([pl.col("name_norm"), pl.lit(" | "), pl.col("addr_norm")]).alias("text"))
+
+
+def pair_texts(pairs: pl.DataFrame, prefix: str) -> pl.DataFrame:
+    ids = pl.concat([pairs.select(pl.col("rec").alias("entity_id")), pairs.select(pl.col("s1").alias("entity_id"))]).unique()
+    t = entity_text(prefix, ids)
+    return (pairs.join(t.rename({"entity_id": "rec", "text": "text_a"}), on="rec", how="left")
+                 .join(t.rename({"entity_id": "s1", "text": "text_b"}), on="s1", how="left"))
+
+
+# ------------------------------------------------------------------------------------------------ mine
+def mine():
+    """Hard positives: true pairs stage 1 is unsure about. Hard negatives: the highest-scoring WRONG candidates of a
+    record (twins, look-alikes). A few easy pairs of each class keep the model calibrated. Held-out S1 entities are
+    never in the training candidates, so nothing here touches the evaluation set."""
+    frac = float(os.environ.get("ER_CE_SAMPLE", 0.33))
+    feat = pl.read_parquet(NORM / f"feat_train{FEAT_TAG}.parquet")
+    feat = feat.filter(pl.col("rec").hash(seed=17) % 1000 < int(frac * 1000))
+    feat = feat.with_columns(pl.Series("p", stage1_probs(feat)))
+    pos, neg = feat.filter(pl.col("label") == 1), feat.filter(pl.col("label") == 0)
+    hard_pos = pos.filter(pl.col("p") < 0.90).with_columns(pl.lit(1).alias("hard"))
+    easy_pos = pos.filter(pl.col("p") >= 0.90).sample(n=min(hard_pos.height, pos.height - hard_pos.height), seed=1).with_columns(pl.lit(0).alias("hard"))
+    hard_neg = (neg.filter(pl.col("p") > 0.05).sort("p", descending=True).group_by("rec", maintain_order=True).head(2)
+                   .with_columns(pl.lit(1).alias("hard")))
+    easy_neg = neg.filter(pl.col("p") <= 0.05).sample(n=min(hard_neg.height // 2 + 1, 200_000), seed=2).with_columns(pl.lit(0).alias("hard"))
+    out = pl.concat([x.select("rec", "s1", "label", "hard") for x in (hard_pos, easy_pos, hard_neg, easy_neg)])
+    out.write_parquet(NORM / f"cepairs{CE_TAG}.parquet")
+    print(f"hard positives {hard_pos.height:,}  easy positives {easy_pos.height:,}  hard negatives {hard_neg.height:,}  "
+          f"easy negatives {easy_neg.height:,}  -> {out.height:,} pairs", flush=True)
+
+
+# ------------------------------------------------------------------------------------------------ train
+def train():
+    import torch
+    from transformers import AutoModelForSequenceClassification, AutoTokenizer, get_linear_schedule_with_warmup
+    pairs = pair_texts(pl.read_parquet(NORM / f"cepairs{CE_TAG}.parquet"), "").drop_nulls().sample(fraction=1.0, shuffle=True, seed=0)
+    steps_total = math.ceil(pairs.height / BATCH)
+    max_steps = int(os.environ.get("ER_CE_STEPS", steps_total))
+    tok = AutoTokenizer.from_pretrained(BASE_MODEL)
+    model = AutoModelForSequenceClassification.from_pretrained(BASE_MODEL, num_labels=1).cuda()
+    opt = torch.optim.AdamW(model.parameters(), lr=3e-5, weight_decay=0.01)
+    sched = get_linear_schedule_with_warmup(opt, int(0.05 * max_steps), max_steps)
+    scaler = torch.amp.GradScaler()
+    a, b, y = pairs["text_a"].to_list(), pairs["text_b"].to_list(), pairs["label"].to_numpy().astype(np.float32)
+    model.train()
+    t0, run = time.time(), 0.0
+    for step in range(max_steps):
+        i = step * BATCH
+        enc = tok(a[i:i + BATCH], b[i:i + BATCH], truncation=True, max_length=MAX_LEN, padding=True, return_tensors="pt").to("cuda")
+        with torch.autocast("cuda", dtype=torch.float16):
+            logit = model(**enc).logits.squeeze(-1)
+        loss = torch.nn.functional.binary_cross_entropy_with_logits(logit.float(), torch.from_numpy(y[i:i + BATCH]).cuda())
+        opt.zero_grad(set_to_none=True)
+        scaler.scale(loss).backward()
+        scaler.unscale_(opt)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        scaler.step(opt); scaler.update(); sched.step()
+        run = 0.98 * run + 0.02 * loss.item() if step else loss.item()
+        if step % 200 == 0:
+            print(f"  step {step}/{max_steps}  loss {run:.4f}  ({time.time() - t0:.0f}s)", flush=True)
+    CE_DIR.mkdir(parents=True, exist_ok=True)
+    model.save_pretrained(CE_DIR); tok.save_pretrained(CE_DIR)
+    print("saved", CE_DIR, flush=True)
+
+
+# ------------------------------------------------------------------------------------------------ score
+def band_pairs(split: str) -> tuple[pl.DataFrame, str]:
+    """(rec, s1) pairs of the uncertain band for a split, and the entity-file prefix."""
+    lo, hi = BAND
+    if split == "test":
+        from predict import PRED, ids_table  # stage-1 probabilities of the test pairs were written by `predict.py score`
+        ids = ids_table()
+        names = ids["entity_id"]
+        n_s1 = pl.scan_parquet(NORM / "test_source1.parquet").select(pl.len()).collect().item()
+        has_addr = pl.concat([pl.scan_parquet(NORM / f"test_source{i}.parquet").select("has_addr") for i in (2, 3)]).collect()["has_addr"].to_numpy()
+        d = pl.scan_parquet(PRED / "*.parquet").collect()
+        d = d.with_columns(pl.Series("has_addr", has_addr[d["rec_i"].to_numpy() - n_s1]))  # S2/S3 records follow the S1 rows
+        d = d.with_columns(pl.Series("rec", names.gather(d["rec_i"].to_numpy())), pl.Series("s1", names.gather(d["s1_i"].to_numpy())))
+        prefix = "test_"
+    else:
+        feat = pl.read_parquet(NORM / f"feat_{split}{FEAT_TAG}.parquet")
+        d = feat.select("rec", "s1", "q_has_addr").rename({"q_has_addr": "has_addr"}).with_columns(pl.Series("p", stage1_probs(feat)), pl.col("has_addr").cast(pl.Boolean))
+        prefix = ""
+    d = d.sort("p", descending=True)
+    best = d.group_by("rec", maintain_order=True).agg(pl.col("p").first().alias("p1"), pl.col("has_addr").first())
+    band = best.filter(((pl.col("p1") >= lo) & (pl.col("p1") < hi)) | ~pl.col("has_addr")).select("rec")
+    top = d.join(band, on="rec", how="semi").with_columns(pl.int_range(1, pl.len() + 1).over("rec").alias("r")).filter(pl.col("r") <= TOPK)
+    pairs = top.select("rec", "s1")
+    ex = load_extras(split)  # name-only extras of the records without an address are scored too
+    if ex is not None:
+        pairs = pl.concat([pairs, ex.select("rec", "s1").join(band, on="rec", how="semi")]).unique()
+    return pairs, prefix
+
+
+def score(split: str):
+    import torch
+    from transformers import AutoModelForSequenceClassification, AutoTokenizer
+    t0 = time.time()
+    pairs, prefix = band_pairs(split)
+    cap = int(os.environ.get("ER_CE_MAX_PAIRS", 0))
+    if cap:
+        pairs = pairs.head(cap)
+    print(f"{split}: {pairs.height:,} pairs in the uncertain band / without address to score ({time.time() - t0:.0f}s)", flush=True)
+    tok = AutoTokenizer.from_pretrained(CE_DIR)
+    model = AutoModelForSequenceClassification.from_pretrained(CE_DIR).cuda().half().eval()
+    parts, step = [], 500_000
+    for lo in range(0, pairs.height, step):
+        pt = pair_texts(pairs.slice(lo, step), prefix).with_columns(pl.col("text_a").fill_null(""), pl.col("text_b").fill_null(""))
+        pt = pt.sort(pl.col("text_a").str.len_chars() + pl.col("text_b").str.len_chars())  # similar lengths per batch
+        a, b, out = pt["text_a"].to_list(), pt["text_b"].to_list(), []
+        with torch.no_grad():
+            for i in range(0, len(a), SCORE_BATCH):
+                enc = tok(a[i:i + SCORE_BATCH], b[i:i + SCORE_BATCH], truncation=True, max_length=MAX_LEN, padding=True, return_tensors="pt").to("cuda")
+                out.append(torch.sigmoid(model(**enc).logits.squeeze(-1).float()).cpu().numpy())
+        parts.append(pt.select("rec", "s1").with_columns(pl.Series("ce_score", np.concatenate(out), dtype=pl.Float32)))
+        print(f"  scored {min(lo + step, pairs.height):,}/{pairs.height:,} ({time.time() - t0:.0f}s)", flush=True)
+    pl.concat(parts).write_parquet(NORM / f"ce_{split}{CE_TAG}.parquet")
+
+
+if __name__ == "__main__":
+    {"mine": mine, "train": train, "score": lambda: score(sys.argv[2])}[sys.argv[1]]()
