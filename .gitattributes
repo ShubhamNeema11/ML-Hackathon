@@ -1,2 +1,9 @@
 output/*.tsv -text
 *.tsv -text
+
+# Linux is the target for the AWS run: keep LF in the repository AND in `git archive` / clones (no CRLF conversion)
+*.sh text eol=lf
+*.py text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+*.json text eol=lf
