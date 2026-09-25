@@ -67,7 +67,7 @@ LEGAL = {
     "opc": {"opc"},
     # France
     "sarl": {"sarl"}, "sas": {"sas"}, "sasu": {"sasu"}, "sa": {"sa"}, "eurl": {"eurl"},
-    "sci": {"sci"}, "snc": {"snc"}, "sca": {"sca"}, "selarl": {"selarl"}, "ei": {"ei"}, "sasu": {"sasu"},
+    "sci": {"sci"}, "snc": {"snc"}, "sca": {"sca"}, "selarl": {"selarl"}, "ei": {"ei"},
 }
 NATIVE_LEGAL = {
     "pvt": "प्राइवेट प्रा ప్రైవేట్ ಪ್ರೈವೇಟ್ பிரைவேட் প্রাইভেট પ્રાઇવેટ પ્રા പ്രൈവറ്റ് ପ୍ରାଇଭେଟ୍ ਪ੍ਰਾਈਵੇਟ",

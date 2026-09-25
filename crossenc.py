@@ -8,12 +8,12 @@ differences are only noise (leading zeros, reformatted units) and must not cost 
   python crossenc.py train              fine-tune multilingual-e5-small       -> models/ce_er/
   python crossenc.py score train|eval|test   score the uncertain band only    -> normalized/ce_<split>.parquet
 
-Selection of what is scored (cheap, and it leaves confident decisions alone):
+Selection of what is scored (measured on the real test set: 7.0M pairs, about 50 min on an RTX 4050 at ~2,300 pairs/s):
   records whose best stage-1 probability lies in the uncertain band, plus records without an address (their extras);
   for each such record its top-K candidates by stage-1 probability.
 Stage 1 is any saved ranker (ER_STAGE1, default the deployed one); the feature files it needs must exist.
 
-Environment knobs: ER_STAGE1, ER_CE_BAND="0.03,0.9995", ER_CE_TOPK=3, ER_CE_SAMPLE (fraction of train records to mine),
+Environment knobs: ER_STAGE1, ER_CE_BAND="0.05,0.99", ER_CE_TOPK=2, ER_CE_SAMPLE (fraction of train records to mine),
 ER_CE_STEPS (stop training early: smoke test), ER_CE_MODEL_DIR, ER_CE_MAX_PAIRS (scoring cap: smoke test).
 Nothing here is trained by the pipeline until `train` is run explicitly.
 """
@@ -32,8 +32,8 @@ from ranker import CE_TAG, FEAT_TAG, load_extras
 BASE_MODEL = "intfloat/multilingual-e5-small"   # MIT licence, 118M parameters
 CE_DIR = ROOT / "models" / os.environ.get("ER_CE_MODEL_DIR", "ce_er")
 STAGE1 = ROOT / "models" / os.environ.get("ER_STAGE1", "ranker_final_backup.txt")
-BAND = tuple(float(x) for x in os.environ.get("ER_CE_BAND", "0.03,0.9995").split(","))
-TOPK = int(os.environ.get("ER_CE_TOPK", 3))
+BAND = tuple(float(x) for x in os.environ.get("ER_CE_BAND", "0.05,0.99").split(","))
+TOPK = int(os.environ.get("ER_CE_TOPK", 2))
 MAX_LEN = 128
 BATCH = int(os.environ.get("ER_CE_BATCH", 64))              # 64 fits a 6 GB card, 128 a 24 GB card
 SCORE_BATCH = int(os.environ.get("ER_CE_SCORE_BATCH", 256))
@@ -115,30 +115,40 @@ def train():
 
 # ------------------------------------------------------------------------------------------------ score
 def band_pairs(split: str) -> tuple[pl.DataFrame, str]:
-    """(rec, s1) pairs of the uncertain band for a split, and the entity-file prefix."""
+    """(rec, s1) pairs of the uncertain band for a split, and the entity-file prefix.
+    Band = records whose best stage-1 probability lies in BAND, plus records without an address; for each, the top-TOPK
+    candidates by stage-1 probability (+ the name-only extras of the records without an address)."""
     lo, hi = BAND
     if split == "test":
-        from predict import PRED, ids_table  # stage-1 probabilities of the test pairs were written by `predict.py score`
-        ids = ids_table()
-        names = ids["entity_id"]
+        # stage-1 probabilities of the test pairs were written by `predict.py score`: (rec_i, s1_i, p) as integers.
+        # Everything is decided on integers; string ids are attached only to the ~10M selected pairs.
+        from predict import PRED, ids_table
+        names = ids_table()["entity_id"]
         n_s1 = pl.scan_parquet(NORM / "test_source1.parquet").select(pl.len()).collect().item()
         has_addr = pl.concat([pl.scan_parquet(NORM / f"test_source{i}.parquet").select("has_addr") for i in (2, 3)]).collect()["has_addr"].to_numpy()
-        d = pl.scan_parquet(PRED / "*.parquet").collect()
-        d = d.with_columns(pl.Series("has_addr", has_addr[d["rec_i"].to_numpy() - n_s1]))  # S2/S3 records follow the S1 rows
-        d = d.with_columns(pl.Series("rec", names.gather(d["rec_i"].to_numpy())), pl.Series("s1", names.gather(d["s1_i"].to_numpy())))
+        d = pl.scan_parquet(PRED / "*.parquet").collect().sort("p", descending=True)
+        best = d.group_by("rec_i", maintain_order=True).agg(pl.col("p").first().alias("p1"))
+        addr = has_addr[best["rec_i"].to_numpy() - n_s1]  # S2/S3 records follow the S1 rows in the id table
+        band = best.filter(pl.Series(((best["p1"].to_numpy() >= lo) & (best["p1"].to_numpy() < hi)) | ~addr)).select("rec_i")
+        top = (d.join(band, on="rec_i", how="semi").with_columns(pl.int_range(1, pl.len() + 1).over("rec_i").alias("r"))
+                .filter(pl.col("r") <= TOPK))
+        del d
+        pairs = pl.DataFrame({"rec": names.gather(top["rec_i"].to_numpy()), "s1": names.gather(top["s1_i"].to_numpy())})
+        band_ids = pl.DataFrame({"rec": names.gather(band["rec_i"].to_numpy())})
         prefix = "test_"
     else:
         feat = pl.read_parquet(NORM / f"feat_{split}{FEAT_TAG}.parquet")
-        d = feat.select("rec", "s1", "q_has_addr").rename({"q_has_addr": "has_addr"}).with_columns(pl.Series("p", stage1_probs(feat)), pl.col("has_addr").cast(pl.Boolean))
+        d = (feat.select("rec", "s1", "q_has_addr").rename({"q_has_addr": "has_addr"})
+                 .with_columns(pl.Series("p", stage1_probs(feat)), pl.col("has_addr").cast(pl.Boolean)).sort("p", descending=True))
+        del feat
+        best = d.group_by("rec", maintain_order=True).agg(pl.col("p").first().alias("p1"), pl.col("has_addr").first())
+        band_ids = best.filter(((pl.col("p1") >= lo) & (pl.col("p1") < hi)) | ~pl.col("has_addr")).select("rec")
+        pairs = (d.join(band_ids, on="rec", how="semi").with_columns(pl.int_range(1, pl.len() + 1).over("rec").alias("r"))
+                  .filter(pl.col("r") <= TOPK).select("rec", "s1"))
         prefix = ""
-    d = d.sort("p", descending=True)
-    best = d.group_by("rec", maintain_order=True).agg(pl.col("p").first().alias("p1"), pl.col("has_addr").first())
-    band = best.filter(((pl.col("p1") >= lo) & (pl.col("p1") < hi)) | ~pl.col("has_addr")).select("rec")
-    top = d.join(band, on="rec", how="semi").with_columns(pl.int_range(1, pl.len() + 1).over("rec").alias("r")).filter(pl.col("r") <= TOPK)
-    pairs = top.select("rec", "s1")
     ex = load_extras(split)  # name-only extras of the records without an address are scored too
     if ex is not None:
-        pairs = pl.concat([pairs, ex.select("rec", "s1").join(band, on="rec", how="semi")]).unique()
+        pairs = pl.concat([pairs, ex.select("rec", "s1").join(band_ids, on="rec", how="semi")]).unique()
     return pairs, prefix
 
 
