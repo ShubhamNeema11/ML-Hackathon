@@ -5,9 +5,19 @@
 set -euo pipefail
 
 echo "== GPU"; nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
-echo "== python"; python3 --version
+# the pipeline was tested with Python 3.11; Ubuntu 22.04 ships 3.10, so install 3.11 (deadsnakes) when it is missing
+PY=python3.11
+if ! command -v "$PY" >/dev/null 2>&1; then
+  echo "== installing Python 3.11"
+  sudo apt-get update -y
+  sudo apt-get install -y software-properties-common
+  sudo add-apt-repository -y ppa:deadsnakes/ppa
+  sudo apt-get update -y
+  sudo apt-get install -y python3.11 python3.11-venv python3.11-dev
+fi
+echo "== python"; "$PY" --version
 
-python3 -m venv .venv
+"$PY" -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip
 # the CUDA 12.4 build of torch first, then everything else pinned in requirements.txt

@@ -17,7 +17,7 @@ The whole pipeline is `python main.py`. This page covers only what is specific t
 ## Steps
 1. Launch the instance, copy the repo onto it (`git clone` or `scp`), and upload the challenge data
    (`dataset/train/*.tsv`, `dataset/test/*.tsv`, and `utils/validate_submission.py` next to `dataset/`) to S3 or with `scp`.
-2. `bash aws/setup.sh` (optionally `S3_DATASET=s3://bucket/path/dataset bash aws/setup.sh`). It creates a virtualenv,
+2. `bash aws/setup.sh` (installs Python 3.11 if the image only has 3.10; optionally `S3_DATASET=s3://bucket/path/dataset bash aws/setup.sh`). It creates a virtualenv,
    installs the pinned requirements and the CUDA build of torch, and copies the data to `/data/dataset`.
 3. `tmux new -s er`, then
    `source .venv/bin/activate && python main.py --dataset /data/dataset --root /data/er_work`
