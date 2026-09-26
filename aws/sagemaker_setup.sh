@@ -17,9 +17,10 @@ FAILED=0
 echo "== GPU"
 if nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null; then ok "GPU visible"; else bad "no GPU: switch the space to a GPU instance type (for example ml.g5.2xlarge)"; fi
 
-echo "== disk (peak about 55 GB: 8 venv + 2.4 dataset + ~20 run files + ~10 models / model cache + ~12 pass-2 mirror, freed after pass 2)"
+echo "== disk (quick path about 25 GB incl. uploads + venv; full plan peak about 55 GB, run NEED_GB=70 bash aws/sagemaker_setup.sh for it)"
+echo "   (full plan: peak about 55 GB: 8 venv + 2.4 dataset + ~20 run files + ~10 models / model cache + ~12 pass-2 mirror, freed after pass 2)"
 FREE=$(df -BG --output=avail "$HOME" | tail -1 | tr -dc 0-9)
-if [ "${FREE:-0}" -ge 70 ]; then ok "${FREE} GB free"; else bad "only ${FREE} GB free in $HOME: increase the space's storage (stop the space, edit the space settings)"; fi
+if [ "${FREE:-0}" -ge "${NEED_GB:-30}" ]; then ok "${FREE} GB free"; else bad "only ${FREE} GB free in $HOME: increase the space's storage (stop the space, edit the space settings)"; fi
 
 echo "== dataset in $ER_DATASET"
 for f in train/train_ground_truth.tsv train/train_source1.tsv train/train_source2.tsv train/train_source3.tsv test/test_source1.tsv test/test_source2.tsv test/test_source3.tsv; do
@@ -63,7 +64,8 @@ fi
 echo
 if [ "$FAILED" = 0 ]; then
   echo "READY. Start the run (in the background, it survives a closed browser tab):"
-  echo "  cd $REPO && nohup bash aws/run_full.sh > run_full.out 2>&1 &     then:  tail -f run_full.out"
+  echo "  quick path (B2 reused, only the no-address specialist trained):  cd $REPO && nohup bash run_quick.sh > run_quick.out 2>&1 &   then: tail -f run_quick.out"
+  echo "  full plan (everything retrained, 12-18 h):                        cd $REPO && nohup bash aws/run_full.sh > run_full.out 2>&1 &"
 else
   echo "NOT READY: fix the [FAIL] lines above and run this script again (it is safe to repeat)."
   exit 1
