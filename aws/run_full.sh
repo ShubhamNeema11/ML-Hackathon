@@ -2,11 +2,13 @@
 # Full run on an AWS GPU instance that RETRAINS the models that were only trained on small samples on the laptop and reuses the rest: the weights
 # of the retrained components (default: cross-encoder, LightGBM rankers, no-address specialist) are trained here, then evaluated on the held-out entities,
 # then the real test set is scored and the final matching written. The fine-tuned e5 embedder and all data / candidate files of the laptop run are reused.
-# Prerequisite: the laptop run's normalized/ and models/ in $ER_ROOT (bash upload_to_s3.sh copies them), the dataset in $ER_DATASET (train/, test/,
-# ../utils/validate_submission.py), `bash aws/setup.sh` done. Run from the repository root:
+# SageMaker JupyterLab (default paths): repo ~/ML-Hackathon, dataset ~/ML-Hackathon/data/{train,test}, work folder ~/er_work. Prerequisite: `bash aws/sagemaker_setup.sh`
+# printed READY (it also unpacks the reused embedder e5_er.zip into ~/er_work/models/). Then, from the repository root:
 #
-#   tmux new -s er
-#   AUTO_STOP=1 S3_OUT=s3://your-bucket/er_full bash aws/run_full.sh
+#   nohup bash aws/run_full.sh > run_full.out 2>&1 &      then:   tail -f run_full.out
+#
+# On an EC2 instance instead: bash aws/setup.sh, ER_ROOT=/data/er_work ER_DATASET=/data/dataset, tmux, AUTO_STOP=1 S3_OUT=s3://your-bucket/er_full.
+# Optional: the laptop run's normalized/ and models/ in $ER_ROOT are reused too (saves the blocking, about 1.5-2 h); without them everything is recomputed.
 #
 # What runs (python main.py --retrain ..., every step its own process, logs in $ER_ROOT/logs/<step>.log, timings in logs/timeline.tsv):
 #   normalize -> sparse + dense blocking (e5 fine-tuned here) -> no-address blocking (TF-IDF) + features -> ranker A -> cross-encoder (address pairs only)
@@ -16,7 +18,7 @@
 # RETRAIN (default ce,rankers,noaddr; also embed, or all) decides which weights are trained again. `main.py --retrain` moves those models and everything
 # derived from them (features, cross-encoder scores, score parts, old output) to $ER_ROOT/_replaced/<time>/, so their steps run again; a dependent component is
 # added automatically (rankers -> ce; embed -> all). Re-running the same command resumes THIS run (finished steps are skipped). Environment options:
-#   ER_ROOT=/data/er_work        work folder with the laptop run's normalized/ + models/      ER_DATASET=/data/dataset
+#   ER_ROOT=$HOME/er_work        work folder (models/e5_er inside; optionally the laptop run's normalized/)      ER_DATASET=$HOME/ML-Hackathon/data
 #   RETRAIN=ce,rankers,noaddr    components whose weights are trained again (embed = e5 embedder: only if you decide to change it)
 #   AUTO_STOP=1                  report + upload + shut the instance down (2 min after success, 30 min after a failure; `sudo shutdown -c` cancels)
 #   S3_OUT=s3://...              copy deliverables/ there at the end
@@ -28,7 +30,8 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 [ -f .venv/bin/activate ] && source .venv/bin/activate
-export PYTHONUTF8=1 ER_ROOT="${ER_ROOT:-/data/er_work}" ER_DATASET="${ER_DATASET:-/data/dataset}"
+[ -z "${ER_DATASET:-}" ] && { [ -d "$PWD/data/train" ] && ER_DATASET="$PWD/data" || ER_DATASET=/data/dataset; }
+export PYTHONUTF8=1 ER_ROOT="${ER_ROOT:-$HOME/er_work}" ER_DATASET
 export ER_CE_SAMPLE="${ER_CE_SAMPLE:-1.0}"
 RETRAIN="${RETRAIN:-ce,rankers,noaddr}"
 AUTO_STOP="${AUTO_STOP:-0}"; DRYRUN="${DRYRUN:-0}"

@@ -11,3 +11,4 @@ output/
 *.tsv
 logs/
 .venv/
+*.zip
