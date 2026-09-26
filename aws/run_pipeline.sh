@@ -133,6 +133,7 @@ p_finish() {
   local N="$REAL/normalized"
   # stage-1 scores of the real test set (upload_to_s3.sh does not upload pred_*): they define which pairs the cross-encoder scores
   run "$REAL" score_a "$N/pred_a/_DONE" env ER_FEAT_TAG=_s ER_MODEL=ranker_a.txt ER_PRED="$N/pred_a" python -u predict.py score
+  run "$REAL" ce_test_small "$N/ce_test_v2.parquet" env "${SMALL[@]}" "${BAND[@]}" ER_PRED="$N/pred_a" python -u crossenc.py score test
   if [ "$P1" = b4 ]; then
     run "$REAL" ce_test_big "$N/ce_test_big.parquet" env "${BIGCE[@]}" "${BAND[@]}" ER_PRED="$N/pred_a" python -u crossenc.py score test
   fi
@@ -148,7 +149,13 @@ p_finish() {
     run "$REAL" write_final "$REAL/output_pass1/matching_results.tsv" env ER_DECISION=decision_$P1.json ER_PRED="$N/$PRED" ER_OUT="$REAL/output_pass1" python -u predict.py write
     FINAL_DIR="$REAL/output_pass1"
   fi
-  x bash -c "python '$(dirname "$ER_DATASET")/utils/validate_submission.py' --matching '$FINAL_DIR/matching_results.tsv' --candidate '$FINAL_DIR/candidate_pairs.tsv' --test-dir '$ER_DATASET/test' | tee '$FINAL_DIR/validator.log'"
+  local VAL="$(dirname "$ER_DATASET")/utils/validate_submission.py"
+  [ -f "$VAL" ] || VAL=$(find "$HOME" "$REAL" -maxdepth 7 -name validate_submission.py 2>/dev/null | head -1)
+  if [ -n "$VAL" ] && [ -f "$VAL" ]; then
+    x bash -c "python '$VAL' --matching '$FINAL_DIR/matching_results.tsv' --candidate '$FINAL_DIR/candidate_pairs.tsv' --test-dir '$ER_DATASET/test' | tee '$FINAL_DIR/validator.log'"
+  else
+    note "validator not found: copy validate_submission.py next to the dataset (../utils/) and run it by hand"
+  fi
 }
 
 p_report() {   # $1 = status text
