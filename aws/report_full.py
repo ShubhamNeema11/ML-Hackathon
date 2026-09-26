@@ -122,7 +122,8 @@ def sanity() -> str:
 
 def main():
     OUT.mkdir(parents=True, exist_ok=True)
-    md = [f"# Retraining run: {STATUS}\n", f"Generated {time.strftime('%Y-%m-%d %H:%M:%S')} on `{platform.node()}` from `{R}`.  Code commit: `{sh('git -C "' + str(CODE) + '" rev-parse --short HEAD')}`.\n",
+    commit = sh('git -C "' + str(CODE) + '" rev-parse --short HEAD')
+    md = [f"# Retraining run: {STATUS}\n", f"Generated {time.strftime('%Y-%m-%d %H:%M:%S')} on `{platform.node()}` from `{R}`.  Code commit: `{commit}`.\n",
           "Pipelines: records WITH an address -> ranker A/B (address records only) + cross-encoder on the uncertain band; records WITHOUT an address -> "
           "char 3-gram TF-IDF blocking + own LightGBM, no cross-encoder. Embedder: the fine-tuned multilingual-e5-small of the earlier run, unchanged, unless listed as retrained below.\n"]
     section(md, "Models trained in this run", trained)
