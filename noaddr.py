@@ -11,7 +11,7 @@ list) and what a name-only record needs: candidates sharing (almost) the same na
   python blocking_noaddr.py build train|eval|test         TF-IDF candidates -> normalized/cand/na_tfidf_<split>.parquet
   python noaddr.py features train|eval|test               -> normalized/feat_noaddr2_<split>.parquet   (ER_NA_TFIDF=0: the old 30-extras variant)
   python noaddr.py fit                                    -> models/noaddr_c.txt, comparison with B2 on the no-address group
-  ER_B2=ranker_addr.txt python noaddr.py joint            -> whole held-out set: address model + specialist, decision -> models/decision_na.json
+  ER_FEAT_TAG=_ce2 ER_B2=ranker_addr.txt python noaddr.py joint            -> whole held-out set: address model + specialist, decision -> models/decision_na.json
   python noaddr.py apply                                  -> patches a finished score dir (pred_final -> pred_final_na) for records without address
   ER_CE=1 ER_CE_TAG=_v2 ER_ADDR_ONLY=1 ER_MODEL=ranker_addr.txt ER_DECISION=decision_addr.json python ranker.py fit     address-only LightGBM
 """
@@ -155,7 +155,7 @@ def fit_b():
                   callbacks=[lgb.early_stopping(100), lgb.log_evaluation(400)])
     m.save_model(str(MODEL_B))
     p_b = m.predict(ev.select(COLS_B).cast(pl.Float32).to_numpy())
-    for w in (0.1, 0.8):
+    for w in (0.1,):
         print(f"orphan weight {w}:", flush=True)
         group_score(record_rt(ev, ev["p_a"].to_numpy()), owned_recs, n_owned, w, "stage A (no CE)")
         group_score(record_rt(ev, p_b), owned_recs, n_owned, w, "stage B (A + CE top-%d)" % CE_K)
@@ -163,9 +163,10 @@ def fit_b():
     print("top features:", ", ".join(k for k, _ in imp[:10]), flush=True)
 
 # ------------------------------------------------------------------------------------------------ joint decision
-# Orphan weights per group: the real share of records without an owner is 26% overall (ranker.REAL_ORPHAN_SHARE) but only ~15% among
-# records without an address (ranker-training data), while the held-out set has 19% there: its no-address orphans weigh 0.15/0.85 / (375/1629).
-NA_ORPHAN_ODDS = 4623 / 26408
+# Orphan weight: eval queries hold every sampled orphan but only the held-out 10% of owned records, so orphans are over-represented by ~10x; the
+# same factor applies to records without an address (ground truth: only 739 of 31,031 no-address training records are orphans, ~2.4%),
+# so ONE weight (ranker's global orphan_w, ~0.1) prices both groups. (An earlier version used 0.76 for no-address records: wrong, it
+# counted records whose owner blocking had missed as orphans.)
 
 
 def tune_joint(rt: pl.DataFrame, own: np.ndarray, w: np.ndarray, n_owned: int):
@@ -206,7 +207,7 @@ def joint():
     (thresholds tuned on the 'thr' half, reported on the other), compared with B2 for everybody under identical pricing."""
     import lightgbm as lgb
     b2 = lgb.Booster(model_file=str(ranker.ROOT / "models" / os.environ.get("ER_B2", "ranker_b2.txt")))
-    ev = pl.read_parquet(NORM / "feat_eval_ce2.parquet")
+    ev = pl.read_parquet(NORM / f"feat_eval{ranker.FEAT_TAG}.parquet")
     ev = ev.with_columns(pl.Series("p", b2.predict(ev.select(b2.feature_name()).cast(pl.Float32).to_numpy())))
     na = pl.read_parquet(NORM / f"feat_noaddr{TAGV}_eval.parquet")
     sp = lgb.Booster(model_file=str(MODEL))
@@ -215,8 +216,7 @@ def joint():
     owned = ground_truth().filter(pl.col("s1").hash(seed=7) % 10 == 0).join(qid, on="rec", how="semi")
     n_all, orphan_w = qid.height, None
     orphan_w = (ranker.REAL_ORPHAN_SHARE / (1 - ranker.REAL_ORPHAN_SHARE)) / ((n_all - owned.height) / owned.height)
-    n_na_owned = owned.join(na.select("rec").unique(), on="rec", how="semi").height
-    w_na = NA_ORPHAN_ODDS / ((na["rec"].n_unique() - n_na_owned) / n_na_owned)
+    w_na = orphan_w
     print(f"orphan weights: addr {orphan_w:.3f}  no-addr {w_na:.3f}", flush=True)
     owned_set = set(owned["rec"].to_list())
     half = lambda d: (d["rec"].hash(seed=3) % 2 == 0)
@@ -324,10 +324,10 @@ def fit():
     p_new = m.predict(xe)
     # B2 on the same eval pairs where it has them (its features come from the old files; missing pairs get 0)
     b2 = lgb.Booster(model_file=str(ranker.ROOT / "models" / os.environ.get("ER_B2", "ranker_b2.txt")))
-    old = pl.read_parquet(NORM / "feat_eval_ce2.parquet").filter(pl.col("q_has_addr") == 0)
+    old = pl.read_parquet(NORM / f"feat_eval{ranker.FEAT_TAG}.parquet").filter(pl.col("q_has_addr") == 0)
     old = old.with_columns(pl.Series("p", b2.predict(old.select(b2.feature_name()).cast(pl.Float32).to_numpy()))).select("rec", "s1", "p")
     evp = ev.select("rec", "s1", "label").join(old, on=["rec", "s1"], how="left").with_columns(pl.col("p").fill_null(0.0))
-    for w in (0.1, 0.8):
+    for w in (0.1,):
         print(f"orphan weight {w}:", flush=True)
         group_score(record_rt(evp, evp["p"].to_numpy()), owned_recs, n_owned, w, "B2 (current, 5 extras)")
         group_score(record_rt(ev, p_new), owned_recs, n_owned, w, "specialist (new cands, no CE)")

@@ -72,6 +72,8 @@ def mine():
     frac = float(os.environ.get("ER_CE_SAMPLE", 0.33))
     feat = pl.read_parquet(NORM / f"feat_train{FEAT_TAG}.parquet")
     feat = feat.filter(pl.col("rec").hash(seed=17) % 1000 < int(frac * 1000))
+    if ADDR_ONLY:  # separate pipelines: the cross-encoder is trained on records WITH an address only
+        feat = feat.filter(pl.col("q_has_addr") == 1)
     feat = feat.with_columns(pl.Series("p", stage1_probs(feat)))
     pos, neg = feat.filter(pl.col("label") == 1), feat.filter(pl.col("label") == 0)
     hard_pos = pos.filter(pl.col("p") < 0.90).with_columns(pl.lit(1).alias("hard"))

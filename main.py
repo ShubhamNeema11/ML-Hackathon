@@ -7,14 +7,17 @@
   python main.py --only block_test,embed_search_test
   python main.py --force                re-run steps even when their outputs exist
   python main.py --skip-ce              no cross-encoder: ranker A only (shorter)
+  python main.py --skip-na              old single pipeline (name-only extras, one ranker for every record)
   python main.py --dataset /data/dataset --root /data/er_work     (or env ER_DATASET / ER_ROOT)
   --eval-frac 0.05 --train-frac 0.10     sample sizes (raise them only for a miniature test dataset)
 
-Order:  normalize -> sparse + dense blocking (held-out eval, ranker-train and test sets) -> name-only extras ->
-        ranker A (structured features, hard-example weighting, tuned decision rule) ->
-        cross-encoder (mine hard pairs, train, score the uncertain band) -> ranker B (A + cross-encoder features) ->
-        choose A or B on the held-out entities -> score the test set -> write matching_results.tsv / candidate_pairs.tsv ->
-        run the organisers' validator.
+Two pipelines (default; --skip-na restores the single pipeline with name-only extras):
+  records WITH an address:    ranker A (structured features, hard-example weighting) -> cross-encoder on the uncertain band -> ranker B
+                              (A + cross-encoder features), both LightGBMs fitted on address records only; A or B chosen on held-out data.
+  records WITHOUT an address: char 3-gram TF-IDF blocking (blocking_noaddr.py) -> its own small LightGBM (noaddr.py), NO cross-encoder.
+Order:  normalize -> sparse + dense blocking (held-out eval, ranker-train and test sets) -> no-address blocking / features / model ->
+        ranker A -> cross-encoder -> ranker B -> choose A or B -> joint decision rule (address model + no-address specialist) ->
+        score the test set -> patch the no-address rows -> write matching_results.tsv / candidate_pairs.tsv -> run the organisers' validator.
 
 Every step is a separate process (the polars-heavy and the GPU-heavy stages do not share one), and its log is
 written to logs/<step>.log. Thread counts and batch sizes are set from the machine (CPU, RAM, GPU memory) unless the
@@ -93,12 +96,15 @@ class Step:
     run: Callable[[], None] | None = None             # in-process step instead of commands
 
 
-def build_steps(root: Path, dataset: Path, skip_ce: bool, eval_frac: float = 0.05, train_frac: float = 0.10) -> list[Step]:
+def build_steps(root: Path, dataset: Path, skip_ce: bool, eval_frac: float = 0.05, train_frac: float = 0.10, skip_na: bool = False) -> list[Step]:
     N, M = root / "normalized", root / "models"
     exists = lambda *ps: (lambda: all(Path(p).exists() for p in ps))
-    A = {"ER_FEAT_TAG": "_s", "ER_MODEL": "ranker_a.txt", "ER_DECISION": "decision_a.json"}
-    B = {"ER_CE": "1", "ER_FEAT_TAG": "_ce", "ER_MODEL": "ranker_b.txt", "ER_DECISION": "decision_b.json"}
-    CE = {"ER_FEAT_TAG": "_s", "ER_STAGE1": "ranker_a.txt"}
+    # separate pipelines: the address models / cross-encoder never see records without an address (and skip the old name-only extras)
+    AO = {} if skip_na else {"ER_ADDR_ONLY": "1", "ER_CE_ADDR_ONLY": "1", "ER_EXTRAS": "0"}
+    A = {"ER_FEAT_TAG": "_s", "ER_MODEL": "ranker_a.txt", "ER_DECISION": "decision_a.json", **AO}
+    B = {"ER_CE": "1", "ER_FEAT_TAG": "_ce", "ER_MODEL": "ranker_b.txt", "ER_DECISION": "decision_b.json", **AO}
+    CE = {"ER_FEAT_TAG": "_s", "ER_STAGE1": "ranker_a.txt", **AO}
+    na = lambda: not skip_na
     final = lambda: json.loads((M / "final.json").read_text()) if (M / "final.json").exists() else {"choice": "A"}
     use_b = lambda: final().get("choice") == "B"
     ce = lambda: not skip_ce
@@ -115,7 +121,7 @@ def build_steps(root: Path, dataset: Path, skip_ce: bool, eval_frac: float = 0.0
 
     def submission_done():
         out = root / "output" / "matching_results.tsv"
-        pred = N / ("pred_b" if use_b() else "pred_a") / "_DONE"
+        pred = N / ("pred_na" if not skip_na else "pred_b" if use_b() else "pred_a") / "_DONE"
         return out.exists() and (M / "final.json").exists() and out.stat().st_mtime > max((M / "final.json").stat().st_mtime, pred.stat().st_mtime if pred.exists() else 0)
 
     validator = dataset.parent / "utils" / "validate_submission.py"
@@ -138,6 +144,12 @@ def build_steps(root: Path, dataset: Path, skip_ce: bool, eval_frac: float = 0.0
              done=exists(N / "cand" / "test_dense" / "_DONE")),
     ]
     for split in ("eval", "train", "test"):
+        if not skip_na:
+            steps += [Step(f"na_block_{split}", f"char 3-gram TF-IDF candidates for the {split} records without an address",
+                           [["blocking_noaddr.py", "build", split]], done=exists(N / "cand" / f"na_tfidf_{split}.parquet")),
+                      Step(f"na_features_{split}", f"pair features of the no-address candidates ({split})", [["noaddr.py", "features", split]],
+                           done=exists(N / f"feat_noaddr2_{split}.parquet"))]
+            continue
         steps.append(Step(f"extras_{split}", f"name-only extra candidates for {split} records without an address",
                           [["extras.py", "sparse", split], ["extras.py", "dense", split], ["extras.py", "build", split]],
                           done=exists(N / "cand" / f"{split}_extra.parquet")))
@@ -161,12 +173,17 @@ def build_steps(root: Path, dataset: Path, skip_ce: bool, eval_frac: float = 0.0
              done=exists(M / "ranker_b.txt", M / "decision_b.json"), when=ce),
         Step("choose_model", "pick A or B on the held-out half no threshold was tuned on", run=choose,
              done=lambda: (M / "final.json").exists() and (skip_ce or json.loads((M / "final.json").read_text()).get("official_b") is not None)),
+        Step("na_fit", "no-address specialist LightGBM (no cross-encoder)", [["noaddr.py", "fit"]], done=exists(M / "noaddr_c.txt"), when=na),
+        Step("na_joint", "joint decision rule: chosen address model + no-address specialist (held-out, two-half protocol)", [["noaddr.py", "joint"]],
+             done=exists(M / "decision_na.json"), when=na),
         Step("score_a", "score every blocked test pair with ranker A (also gives stage-1 scores for the cross-encoder band)",
              [["predict.py", "score"]], {**A, "ER_PRED": str(N / "pred_a")}, done=exists(N / "pred_a" / "_DONE")),
         Step("ce_score_test", "cross-encoder: score the uncertain band of the test set", [["crossenc.py", "score", "test"]],
              {**CE, "ER_PRED": str(N / "pred_a")}, done=exists(N / "ce_test.parquet"), when=lambda: use_b()),
         Step("score_b", "score every blocked test pair with ranker B", [["predict.py", "score"]], {**B, "ER_PRED": str(N / "pred_b")},
              done=exists(N / "pred_b" / "_DONE"), when=lambda: use_b()),
+        Step("na_apply", "replace the scores of the test records without an address by the specialist's", [["noaddr.py", "apply"]],
+             done=exists(N / "pred_na" / "_DONE"), when=na),
         Step("write_submission", "write matching_results.tsv and candidate_pairs.tsv with the tuned decision rule",
              [["predict.py", "write"]], done=submission_done),
     ]
@@ -177,11 +194,18 @@ def build_steps(root: Path, dataset: Path, skip_ce: bool, eval_frac: float = 0.0
     return steps
 
 
-def step_env(step: Step, root: Path, use_b: bool) -> dict:
+def step_env(step: Step, root: Path, use_b: bool, skip_na: bool = False) -> dict:
     env = dict(step.env)
-    if step.name == "write_submission":  # the winning model's decision rule and score parts (known only after choose_model)
-        n = root / "normalized"
-        env.update({"ER_DECISION": "decision_b.json" if use_b else "decision_a.json", "ER_PRED": str(n / ("pred_b" if use_b else "pred_a"))})
+    n = root / "normalized"
+    if step.name in ("na_fit", "na_joint"):  # the chosen address model and its feature files (the specialist itself never uses ER_CE)
+        env.update({"ER_B2": "ranker_b.txt" if use_b else "ranker_a.txt", "ER_FEAT_TAG": "_ce" if use_b else "_s", "ER_DECISION": "decision_na.json"})
+    elif step.name == "na_apply":
+        env.update({"ER_PRED_IN": str(n / ("pred_b" if use_b else "pred_a")), "ER_PRED_OUT": str(n / "pred_na")})
+    elif step.name == "write_submission":  # the winning decision rule and score parts (known only after choose_model)
+        if skip_na:
+            env.update({"ER_DECISION": "decision_b.json" if use_b else "decision_a.json", "ER_PRED": str(n / ("pred_b" if use_b else "pred_a"))})
+        else:
+            env.update({"ER_DECISION": "decision_na.json", "ER_PRED": str(n / "pred_na")})
     return env
 
 
@@ -218,7 +242,7 @@ def main():
     ap.add_argument("--dataset", default=os.environ.get("ER_DATASET") or DEFAULT_DATASET)
     ap.add_argument("--root", default=os.environ.get("ER_ROOT") or str(CODE), help="folder for normalized/, models/, output/, logs/")
     ap.add_argument("--list", action="store_true"); ap.add_argument("--dry-run", action="store_true")
-    ap.add_argument("--force", action="store_true"); ap.add_argument("--skip-ce", action="store_true")
+    ap.add_argument("--force", action="store_true"); ap.add_argument("--skip-ce", action="store_true"); ap.add_argument("--skip-na", action="store_true")
     ap.add_argument("--from", dest="start"); ap.add_argument("--to", dest="stop"); ap.add_argument("--only")
     ap.add_argument("--no-preflight", action="store_true")
     ap.add_argument("--eval-frac", type=float, default=0.05, help="share of held-out records used as evaluation queries")
@@ -228,7 +252,7 @@ def main():
     root, dataset = Path(args.root).resolve(), Path(args.dataset)
     os.environ["ER_ROOT"], os.environ["ER_DATASET"] = str(root), str(dataset)
     (root / "logs").mkdir(parents=True, exist_ok=True)
-    steps = build_steps(root, dataset, args.skip_ce, args.eval_frac, args.train_frac)
+    steps = build_steps(root, dataset, args.skip_ce, args.eval_frac, args.train_frac, args.skip_na)
     names = [s.name for s in steps]
     for opt in (args.start, args.stop):
         if opt and opt not in names:
@@ -240,7 +264,7 @@ def main():
             print(f"{s.name:20s} [{state}]  {s.desc}")
             if args.dry_run:
                 for c in s.cmds:
-                    print(f"{'':22s}python {' '.join(c)}   {step_env(s, root, False) or ''}")
+                    print(f"{'':22s}python {' '.join(c)}   {step_env(s, root, False, args.skip_na) or ''}")
         return
 
     autoconfigure()
@@ -276,7 +300,7 @@ def main():
                 use_b = (root / "models" / "final.json").exists() and json.loads((root / "models" / "final.json").read_text()).get("choice") == "B"
                 for argv in s.cmds:
                     log_path = root / "logs" / f"{s.name}.log"
-                    rc = run_cmd(s, argv, step_env(s, root, use_b), log_path)
+                    rc = run_cmd(s, argv, step_env(s, root, use_b, args.skip_na), log_path)
                     if rc != 0:
                         tail = "\n".join(log_path.read_text(errors="replace").strip().splitlines()[-15:])
                         print(f"!! {s.name} failed (exit {rc}); last log lines:\n{tail}\nfull log: {log_path}\n"
