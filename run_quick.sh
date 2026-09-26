@@ -3,11 +3,12 @@
 # records, patch the existing B2 test scores for records without an address, write the final files.
 #
 # SageMaker JupyterLab (defaults: work folder ~/er_work, dataset ~/ML-Hackathon/data):
-#   laptop:     bash upload_quick.sh <bucket>                                      (about 7.3 GB, see that script)
+#   laptop:     python stage_upload.py  -> Downloads/er_work_upload/er_work; S3 console: bucket -> Upload -> Add folder -> that er_work folder
+#               (or, with the AWS CLI: bash upload_quick.sh <bucket>)             about 7.75 GB either way; bucket name should start with "sagemaker-"
 #   SageMaker:  cd ~/ML-Hackathon && git pull
-#               aws s3 sync s3://<bucket>/er_work ~/er_work --only-show-errors
+#               aws s3 sync s3://<bucket>/er_work ~/er_work --only-show-errors     (or let this script do it: S3_IN=s3://<bucket> bash run_quick.sh)
 #               bash aws/sagemaker_setup.sh                                        (must print READY)
-#               nohup bash run_quick.sh > run_quick.out 2>&1 &      then: tail -f run_quick.out
+#               S3_IN=s3://<bucket> nohup bash run_quick.sh > run_quick.out 2>&1 &     then: tail -f run_quick.out
 # On the laptop itself: bash run_quick.sh   (work folder = the repository). Resumable: finished steps are skipped.
 #
 # Reused as they are: normalized data, sparse + dense blocking, e5 embedder, cross-encoder ce_er2 and its test scores, ranker B2
@@ -24,6 +25,10 @@ if [ -z "${ER_DATASET:-}" ] && [ -d "$PWD/data/train" ]; then ER_DATASET="$PWD/d
 [ -n "${ER_DATASET:-}" ] && export ER_DATASET
 export PYTHONUTF8=1 ER_ROOT
 echo "work folder: $ER_ROOT   dataset: ${ER_DATASET:-(block.py default)}"
+if [ -n "${S3_IN:-}" ]; then   # the uploaded er_work folder (s3://<bucket>/er_work) -> $ER_ROOT; only missing / changed files are copied
+  echo "copying ${S3_IN%/}/er_work -> $ER_ROOT"; mkdir -p "$ER_ROOT"
+  aws s3 sync "${S3_IN%/}/er_work" "$ER_ROOT" --only-show-errors || { echo "aws s3 sync failed (AccessDenied: the SageMaker role cannot read this bucket; use a bucket named sagemaker-...)"; exit 1; }
+fi
 python -c "import torch, sys; sys.exit(0 if torch.cuda.is_available() else 1)" || { echo "torch cannot see a GPU (the dense search and the TF-IDF search need one)"; exit 1; }
 python -c "from block import DATASET; import sys; p = DATASET / 'train' / 'train_ground_truth.tsv'; sys.exit(0 if p.exists() else print('missing', p) or 1)" || exit 1
 export ER_NA_TFIDF=1 ER_EXTRAS=0 ER_B2=ranker_b2.txt ER_FEAT_TAG=_ce2 ER_DECISION=decision_na.json
