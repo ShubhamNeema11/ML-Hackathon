@@ -20,6 +20,9 @@ transformers==5.17.0
 datasets==5.0.1
 accelerate==1.15.0
 
+# no-address blocking (blocking_noaddr.py: char n-gram TF-IDF)
+scikit-learn==1.5.2
+
 # ranking
 lightgbm==4.7.0
 RapidFuzz==3.14.6
