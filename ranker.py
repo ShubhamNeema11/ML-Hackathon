@@ -231,7 +231,7 @@ def mine_hard(x: np.ndarray, y: np.ndarray, params: dict, seed: int = 0):
 
 # ----------------------------------------------------------------------------------------- decision rule
 DECISION_PATH = ROOT / "models" / os.environ.get("ER_DECISION", "decision.json")
-REAL_ORPHAN_SHARE = 1 - 7638365 / (5034616 + 5285603)   # share of S2/S3 records without an S1 owner in the training data
+REAL_ORPHAN_SHARE = float(os.environ.get("ER_ORPHAN_SHARE", 1 - 7638365 / (5034616 + 5285603)))   # share of S2/S3 records without an S1 owner: training 0.26 (default); the TEST set is ~0.40 (S1 side and our own assignments agree)
 
 
 def record_table(ev: pl.DataFrame, p: np.ndarray) -> pl.DataFrame:

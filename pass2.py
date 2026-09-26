@@ -31,7 +31,7 @@ from rapidfuzz import fuzz, process
 from block import NORM, ROOT, ground_truth, is_val_s1
 
 MIN_P = 0.005      # pairs below this pass-1 probability are dropped (they never win)
-TOPR = 3           # candidates per record that pass 2 re-scores
+TOPR = int(os.environ.get("ER_PASS2_TOPR", 5))   # candidates per record that pass 2 re-scores (5: same-name twins of no-address records sit lower)
 SIB_P = 0.8        # a record counts as a confident sibling of its top S1 above this probability
 N_SIB = 4          # siblings compared per S1
 PASS1 = Path(os.environ.get("ER_PASS1", NORM / "pred_final"))
@@ -43,7 +43,9 @@ FIT_FRAC = float(os.environ.get("ER_PASS2_FIT_FRAC", 0.3))
 
 FEATS2 = ["p", "logit", "r_rank", "p1", "p2", "gap_best", "margin", "has_addr", "is_s3",
           "n_oth", "n_oth_hi", "n_oth_s2", "n_oth_s3", "sum_p_oth", "pmax_oth", "n_better", "n_cand_e",
-          "sib_n", "sib_sim_max", "sib_sim_mean", "sib_addr_n"]
+          "sib_n", "sib_sim_max", "sib_sim_mean", "sib_addr_n",
+          # relative to the record's other candidates: does THIS candidate have the better sibling support / claims than the best other one?
+          "sib_sim_other", "sib_sim_gap", "n_oth_other", "n_oth_gap", "sum_p_oth_other", "sum_p_oth_gap"]
 
 
 # ------------------------------------------------------------------------------------------------ world
@@ -71,7 +73,7 @@ def sibling_features(d: pl.DataFrame, w: dict) -> pl.DataFrame:
     claim = (pl.col("r_rank") == 1) & (pl.col("p") >= SIB_P)
     sibs = (d.filter(claim).sort("p", descending=True).group_by("s1_i", maintain_order=True).head(N_SIB)
              .select("s1_i", pl.col("rec_i").alias("sib_i")))
-    todo = d.filter((pl.col("r_rank") <= 2) & (pl.col("p") >= 0.02) & (pl.col("p") < 0.995)).select("rec_i", "s1_i")
+    todo = d.filter((pl.col("r_rank") <= TOPR) & (pl.col("p") >= 0.02) & (pl.col("p") < 0.995)).select("rec_i", "s1_i")
     j = todo.join(sibs, on="s1_i").filter(pl.col("rec_i") != pl.col("sib_i"))
     schema = {"rec_i": pl.UInt32, "s1_i": pl.UInt32, "sib_n": pl.UInt32, "sib_sim_max": pl.Float32, "sib_sim_mean": pl.Float32, "sib_addr_n": pl.Int64}
     if j.height == 0:
@@ -118,6 +120,12 @@ def build_features(d: pl.DataFrame, w: dict) -> pl.DataFrame:
         (pl.col("p").clip(1e-6, 1 - 1e-6) / (1 - pl.col("p").clip(1e-6, 1 - 1e-6))).log().alias("logit"))
     sib = sibling_features(d, w)
     d = d.join(sib, on=["rec_i", "s1_i"], how="left")
+    for col, name in (("sib_sim_max", "sib_sim"), ("n_oth", "n_oth"), ("sum_p_oth", "sum_p_oth")):
+        v = pl.col(col).cast(pl.Float32).fill_null(0.0)
+        top = d.group_by("rec_i").agg(v.sort(descending=True).get(0, null_on_oob=True).alias("_t1"),
+                                      v.sort(descending=True).get(1, null_on_oob=True).fill_null(0.0).alias("_t2"))
+        d = (d.join(top, on="rec_i").with_columns(pl.when(v >= pl.col("_t1")).then(pl.col("_t2")).otherwise(pl.col("_t1")).alias(f"{name}_other"))
+              .with_columns((v - pl.col(f"{name}_other")).alias(f"{name}_gap")).drop("_t1", "_t2"))
     return d.select("rec_i", "s1_i", *FEATS2)
 
 

@@ -366,8 +366,14 @@ def fit():
     n_orph = ev["rec"].n_unique() - n_owned
     print(f"eval no-address: {n_owned} owned, {n_orph} orphans", flush=True)
     xe = ev.select(COLS).cast(pl.Float32).to_numpy()
-    params = A_PARAMS
-    m = lgb.train(params, dtr, 3000, valid_sets=[des], callbacks=[lgb.early_stopping(100), lgb.log_evaluation(200)])
+    # hyperparameters (defaults = A_PARAMS, 3000 rounds): ER_NA_LR, ER_NA_LEAVES, ER_NA_MINLEAF, ER_NA_ROUNDS; chosen on the training-internal split only
+    params = dict(A_PARAMS, learning_rate=float(os.environ.get("ER_NA_LR", A_PARAMS["learning_rate"])),
+                  num_leaves=int(os.environ.get("ER_NA_LEAVES", A_PARAMS["num_leaves"])), min_data_in_leaf=int(os.environ.get("ER_NA_MINLEAF", A_PARAMS["min_data_in_leaf"])))
+    m = lgb.train(params, dtr, int(os.environ.get("ER_NA_ROUNDS", 3000)), valid_sets=[dtr, des], valid_names=["train", "es"],
+                  callbacks=[lgb.early_stopping(100), lgb.log_evaluation(500)])
+    tr_ll, es_ll = m.best_score["train"]["binary_logloss"], m.best_score["es"]["binary_logloss"]
+    print(f"TUNE lr {params['learning_rate']} leaves {params['num_leaves']} min_leaf {params['min_data_in_leaf']}: best iteration {m.best_iteration}, "
+          f"logloss train {tr_ll:.5f} / early-stop split {es_ll:.5f} (gap {es_ll - tr_ll:.5f})", flush=True)
     m.save_model(str(MODEL))
     p_new = m.predict(xe)
     # B2 on the same eval pairs where it has them (its features come from the old files; missing pairs get 0)
