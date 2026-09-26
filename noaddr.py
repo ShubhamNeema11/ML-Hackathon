@@ -338,11 +338,28 @@ def record_rt(f: pl.DataFrame, p: np.ndarray) -> pl.DataFrame:
 def fit():
     import lightgbm as lgb
     tr_split = "trainall" if (NORM / f"feat_noaddr{TAGV}_trainall.parquet").exists() else "train"   # all no-address training records when built
-    tr = pl.read_parquet(NORM / f"feat_noaddr{TAGV}_{tr_split}.parquet")
+    import gc
+    # only the columns the model uses (the ~10M-row trainall table would not fit next to its numpy copy otherwise)
+    tr = pl.read_parquet(NORM / f"feat_noaddr{TAGV}_{tr_split}.parquet", columns=COLS + ["label", "rec"])
     ev = pl.read_parquet(NORM / f"feat_noaddr{TAGV}_eval.parquet")
     print(f"training set: feat_noaddr{TAGV}_{tr_split}.parquet", flush=True)
-    x, y = tr.select(COLS).cast(pl.Float32).to_numpy(), tr["label"].to_numpy()
-    print(f"train pairs {tr.height:,} (pos {int(y.sum()):,}) records {tr['rec'].n_unique():,}; eval pairs {ev.height:,} records {ev['rec'].n_unique():,}", flush=True)
+    # early stopping on a record-split of the TRAINING records, so the eval records stay untouched
+    es = pl.Series((tr["rec"].hash(seed=11) % 5 == 0).to_numpy())
+    print(f"train pairs {tr.height:,} (pos {int(tr['label'].sum()):,}) records {tr['rec'].n_unique():,}; eval pairs {ev.height:,} records {ev['rec'].n_unique():,}", flush=True)
+    parts = {k: tr.filter(es if k else ~es) for k in (False, True)}
+    del tr
+    gc.collect()
+    data = {}
+    for k, d in parts.items():
+        data[k] = (d.select(COLS).cast(pl.Float32).to_numpy(), d["label"].to_numpy())
+        parts[k] = None
+        gc.collect()
+    dtr = lgb.Dataset(data[False][0], data[False][1], feature_name=COLS, free_raw_data=True)
+    dtr.construct()
+    des = lgb.Dataset(data[True][0], data[True][1], reference=dtr, free_raw_data=True)
+    des.construct()
+    del data
+    gc.collect()
     qid = pl.read_parquet(NORM / "eval_queries.parquet").rename({"entity_id": "rec"})
     owned = ground_truth().filter(pl.col("s1").hash(seed=7) % 10 == 0).join(qid, on="rec", how="semi").join(ev.select("rec").unique(), on="rec", how="semi")
     owned_recs, n_owned = set(owned["rec"].to_list()), owned.height
@@ -350,10 +367,7 @@ def fit():
     print(f"eval no-address: {n_owned} owned, {n_orph} orphans", flush=True)
     xe = ev.select(COLS).cast(pl.Float32).to_numpy()
     params = A_PARAMS
-    # early stopping on a record-split of the TRAINING records, so the eval records stay untouched
-    es = (tr["rec"].hash(seed=11) % 5 == 0).to_numpy()
-    m = lgb.train(params, lgb.Dataset(x[~es], y[~es], feature_name=COLS), 3000, valid_sets=[lgb.Dataset(x[es], y[es])],
-                  callbacks=[lgb.early_stopping(100), lgb.log_evaluation(200)])
+    m = lgb.train(params, dtr, 3000, valid_sets=[des], callbacks=[lgb.early_stopping(100), lgb.log_evaluation(200)])
     m.save_model(str(MODEL))
     p_new = m.predict(xe)
     # B2 on the same eval pairs where it has them (its features come from the old files; missing pairs get 0)
