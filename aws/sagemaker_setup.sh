@@ -17,9 +17,9 @@ FAILED=0
 echo "== GPU"
 if nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null; then ok "GPU visible"; else bad "no GPU: switch the space to a GPU instance type (for example ml.g5.2xlarge)"; fi
 
-echo "== disk (this run needs about 45 GB: 8 venv + 3 dataset + ~25 run files + 2 models/cache)"
+echo "== disk (peak about 55 GB: 8 venv + 2.4 dataset + ~20 run files + ~10 models / model cache + ~12 pass-2 mirror, freed after pass 2)"
 FREE=$(df -BG --output=avail "$HOME" | tail -1 | tr -dc 0-9)
-if [ "${FREE:-0}" -ge 60 ]; then ok "${FREE} GB free"; else bad "only ${FREE} GB free in $HOME: increase the space's storage (stop the space, edit the space settings)"; fi
+if [ "${FREE:-0}" -ge 70 ]; then ok "${FREE} GB free"; else bad "only ${FREE} GB free in $HOME: increase the space's storage (stop the space, edit the space settings)"; fi
 
 echo "== dataset in $ER_DATASET"
 for f in train/train_ground_truth.tsv train/train_source1.tsv train/train_source2.tsv train/train_source3.tsv test/test_source1.tsv test/test_source2.tsv test/test_source3.tsv; do

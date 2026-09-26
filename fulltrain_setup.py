@@ -23,6 +23,9 @@ def link(src: Path, dst: Path):
 def main():
     for i in (1, 2, 3):
         link(SRC / "normalized" / f"source{i}.parquet", DST / "normalized" / f"test_source{i}.parquet")
+        fix = SRC / "normalized" / f"state_fix_source{i}.parquet"   # the corrected-state overlay of the training files plays the test overlay here
+        if fix.exists():
+            link(fix, DST / "normalized" / f"state_fix_test_source{i}.parquet")
     for f in (SRC / "models").rglob("*"):
         if f.is_file():
             link(f, DST / "models" / f.relative_to(SRC / "models"))

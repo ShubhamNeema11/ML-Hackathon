@@ -29,6 +29,7 @@ FEAT_CHUNK = 1_000_000
 MODEL_PATH = ROOT / "models" / os.environ.get("ER_MODEL", "ranker.txt")
 CE_TAG = os.environ.get("ER_CE_TAG", "")  # suffix of the cross-encoder score files (ce_<split><tag>.parquet)
 CE2_TAG = os.environ.get("ER_CE2_TAG", "")  # optional second cross-encoder (e.g. "_big"): ce2_score / ce2_gap_best next to the first one
+CE3_TAG = os.environ.get("ER_CE3_TAG", "")  # optional third score set (with ER_CE2_TAG: the name-only and address-only rerankers): ce3_score / ce3_gap_best
 FEAT_TAG = os.environ.get("ER_FEAT_TAG", "")  # e.g. "_v2": feature files feat_train_v2.parquet, kept apart from v1
 # Telangana was split from Andhra Pradesh in 2014 and the sources disagree on Hyderabad-area addresses:
 # 177 of the 245 true pairs with different states are exactly AP vs TS, so the two compare as the same state.
@@ -145,7 +146,7 @@ _STRUCT = [f for f in structfeat.STRUCT_FEATURES
 FEATURES = FEATURES_BASE + (_STRUCT if os.environ.get("ER_STRUCT", "1") == "1" else [])
 # optional cross-encoder evidence (crossenc.py): NaN where a pair was not scored
 if os.environ.get("ER_CE", "0") == "1":
-    FEATURES = FEATURES + ["ce_score", "ce_gap_best"] + (["ce2_score", "ce2_gap_best"] if CE2_TAG else [])
+    FEATURES = FEATURES + ["ce_score", "ce_gap_best"] + (["ce2_score", "ce2_gap_best"] if CE2_TAG else []) + (["ce3_score", "ce3_gap_best"] if CE3_TAG else [])
 CATEGORICAL = [f for f in structfeat.CATEGORICAL if f in FEATURES]
 
 
@@ -154,9 +155,9 @@ def attach_ce(f: pl.DataFrame, name: str) -> pl.DataFrame:
     With ER_CE2_TAG a second cross-encoder adds ce2_score / ce2_gap_best the same way."""
     if os.environ.get("ER_CE", "0") != "1":
         return join_ce(f, None)  # cross-encoder features are not part of this model
-    for tag, col in ((CE_TAG, "ce"), (CE2_TAG, "ce2")):
-        if col == "ce2" and not tag:
-            break
+    for tag, col in ((CE_TAG, "ce"), (CE2_TAG, "ce2"), (CE3_TAG, "ce3")):
+        if col != "ce" and not tag:
+            continue
         p = NORM / f"ce_{name}{tag}.parquet"
         if not p.exists():  # ER_CE=1 asks for them: never fall back to silent NaNs
             raise FileNotFoundError(f"ER_CE=1 but {p.name} is missing - run `python crossenc.py score {name}` first (or unset ER_CE)")

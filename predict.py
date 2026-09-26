@@ -21,7 +21,7 @@ import numpy as np
 import polars as pl
 
 from block import CHUNK, NORM, ROOT
-from ranker import CE2_TAG, CE_TAG, DECISION_PATH, MODEL_PATH, add_extras, join_ce, load_extras, merge_channels, read_texts, retrieval_features, string_features
+from ranker import CE2_TAG, CE3_TAG, CE_TAG, DECISION_PATH, MODEL_PATH, add_extras, join_ce, load_extras, merge_channels, read_texts, retrieval_features, string_features
 
 OUT = Path(os.environ.get("ER_OUT", ROOT / "output"))  # ER_OUT: write elsewhere (tests)
 PRED = Path(os.environ.get("ER_PRED", NORM / "pred"))
@@ -69,6 +69,9 @@ def score():
     cols = model.feature_name() if hasattr(model, "feature_name") else model.cols  # works for the old 28/29-feature models and the new ones alike
     ce = pl.read_parquet(NORM / f"ce_test{CE_TAG}.parquet") if os.environ.get("ER_CE", "0") == "1" and (NORM / f"ce_test{CE_TAG}.parquet").exists() else None
     ce2 = pl.read_parquet(NORM / f"ce_test{CE2_TAG}.parquet") if CE2_TAG and os.environ.get("ER_CE", "0") == "1" and (NORM / f"ce_test{CE2_TAG}.parquet").exists() else None
+    ce3 = pl.read_parquet(NORM / f"ce_test{CE3_TAG}.parquet") if CE3_TAG and os.environ.get("ER_CE", "0") == "1" and (NORM / f"ce_test{CE3_TAG}.parquet").exists() else None
+    if any(c.startswith("ce3_") for c in cols) and ce3 is None:
+        raise SystemExit(f"{MODEL_PATH.name} uses third score-set features: set ER_CE=1, ER_CE3_TAG and provide normalized/ce_test{CE3_TAG}.parquet")
     if any(c.startswith("ce2_") for c in cols) and ce2 is None:
         raise SystemExit(f"{MODEL_PATH.name} uses second cross-encoder features: set ER_CE=1, ER_CE2_TAG and provide normalized/ce_test{CE2_TAG}.parquet")
     if any(c.startswith("ce_") for c in cols) and ce is None:  # the model was trained with cross-encoder features
@@ -104,6 +107,8 @@ def score():
         f = join_ce(string_features(c, texts.join(need, on="entity_id", how="semi")), ce)
         if ce2 is not None:
             f = join_ce(f, ce2, "ce2")
+        if ce3 is not None:
+            f = join_ce(f, ce3, "ce3")
         p = model.predict(f) if MODEL_PATH.suffix == ".pkl" else model.predict(f.select(cols).cast(pl.Float32).to_numpy())
         f = (f.select("rec", "s1").with_columns(pl.Series("p", p, dtype=pl.Float32))
               .join(id_rec, on="rec").join(id_s1, on="s1").select("rec_i", "s1_i", "p"))

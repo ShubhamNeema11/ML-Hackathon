@@ -35,6 +35,38 @@ A_PARAMS = dict(objective="binary", learning_rate=0.03, num_leaves=31, min_data_
                 lambda_l2=5.0, verbose=-1, num_threads=os.cpu_count() or 8)
 
 
+def trainall_queries():
+    """Every no-address training record the specialist may learn from: not a held-out evaluation query and not owned by a held-out S1 entity
+    (the same rule as block.ranker_train_queries, without the 10% sample) -> normalized/trainall_queries.parquet."""
+    from block import is_val_s1
+    q = (pl.concat([pl.scan_parquet(NORM / f"source{i}.parquet").select("entity_id", "has_addr") for i in (2, 3)])
+           .filter(~pl.col("has_addr")).select("entity_id").collect())
+    owner = ground_truth().rename({"rec": "entity_id"})
+    q = q.join(owner, on="entity_id", how="left")
+    # owned by a held-out S1 -> excluded; orphans in pass 2's held-out orphan sample (pass2.populations: hash(seed=7) % 10 == 0) -> excluded too
+    q = q.filter((pl.col("s1").is_not_null() & ~is_val_s1()) | (pl.col("s1").is_null() & (pl.col("entity_id").hash(seed=7) % 10 != 0))).select("entity_id")
+    q = q.join(pl.read_parquet(NORM / "eval_queries.parquet"), on="entity_id", how="anti")
+    q.write_parquet(NORM / "trainall_queries.parquet")
+    print(f"trainall: {q.height:,} no-address training records (held-out entities and evaluation queries excluded)", flush=True)
+
+
+def regular_sparse():
+    """The regular sparse channel (block.py keys, top-10) for the trainall records -> normalized/cand/trainall_sparse/part0000.parquet."""
+    from block import SparseIndex, load
+    q = pl.concat([load("train", i) for i in (2, 3)]).join(pl.read_parquet(NORM / "trainall_queries.parquet"), on="entity_id", how="semi")
+    SparseIndex(load("train", 1)).search(q, out_dir=NORM / "cand" / "trainall_sparse")
+    print(f"trainall sparse candidates for {q.height:,} records", flush=True)
+
+
+def regular_dense():
+    """The regular dense channel (the fine-tuned e5, top-10) for the trainall records -> normalized/cand/trainall_dense/ (GPU, own process)."""
+    import embed
+    keep = pl.read_parquet(NORM / "trainall_queries.parquet")
+    qt = pl.concat([embed.texts("train", i).join(keep, on="entity_id", how="semi") for i in (2, 3)])
+    embed.search(embed.texts("train", 1), lambda c: [qt.filter(pl.col("country") == c)], embed.load_model(), out_dir=NORM / "cand" / "trainall_dense")
+    print(f"trainall dense candidates for {qt.height:,} records", flush=True)
+
+
 def s1_name_counts(prefix: str) -> pl.DataFrame:
     """How many S1 entities carry each exact (country, name_core): a candidate whose name is shared is a poorer bet."""
     d = pl.read_parquet(NORM / f"{prefix}source1.parquet", columns=["entity_id", "country", "name_core"])
@@ -77,7 +109,7 @@ def build(split: str):
     """Features of all candidates (regular top-10 U top-10 plus the deep name-only list) of the records without an address."""
     prefix = "" if split != "test" else "test_"
     ids = pl.concat([pl.scan_parquet(NORM / f"{prefix}source{i}.parquet").select("entity_id", "has_addr") for i in (2, 3)]).filter(~pl.col("has_addr")).select("entity_id").collect()
-    q = {"train": "train_queries", "eval": "eval_queries"}.get(split)
+    q = {"train": "train_queries", "eval": "eval_queries", "trainall": "trainall_queries"}.get(split)
     if q:
         ids = ids.join(pl.read_parquet(NORM / f"{q}.parquet"), on="entity_id", how="semi")
     rec = ids.rename({"entity_id": "rec"})
@@ -305,8 +337,10 @@ def record_rt(f: pl.DataFrame, p: np.ndarray) -> pl.DataFrame:
 
 def fit():
     import lightgbm as lgb
-    tr = pl.read_parquet(NORM / f"feat_noaddr{TAGV}_train.parquet")
+    tr_split = "trainall" if (NORM / f"feat_noaddr{TAGV}_trainall.parquet").exists() else "train"   # all no-address training records when built
+    tr = pl.read_parquet(NORM / f"feat_noaddr{TAGV}_{tr_split}.parquet")
     ev = pl.read_parquet(NORM / f"feat_noaddr{TAGV}_eval.parquet")
+    print(f"training set: feat_noaddr{TAGV}_{tr_split}.parquet", flush=True)
     x, y = tr.select(COLS).cast(pl.Float32).to_numpy(), tr["label"].to_numpy()
     print(f"train pairs {tr.height:,} (pos {int(y.sum()):,}) records {tr['rec'].n_unique():,}; eval pairs {ev.height:,} records {ev['rec'].n_unique():,}", flush=True)
     qid = pl.read_parquet(NORM / "eval_queries.parquet").rename({"entity_id": "rec"})
@@ -336,4 +370,4 @@ def fit():
 
 
 if __name__ == "__main__":
-    {"features": lambda: build(sys.argv[2]), "fit": fit, "stage_a": lambda: stage_a(sys.argv[2]), "fit_b": fit_b, "joint": joint, "apply": apply}[sys.argv[1]]()
+    {"features": lambda: build(sys.argv[2]), "fit": fit, "stage_a": lambda: stage_a(sys.argv[2]), "fit_b": fit_b, "joint": joint, "apply": apply, "trainall_queries": trainall_queries, "regular_sparse": regular_sparse, "regular_dense": regular_dense}[sys.argv[1]]()

@@ -40,7 +40,7 @@ def queries(split: str) -> pl.DataFrame:
     prefix = "test_" if split == "test" else ""
     q = (pl.concat([pl.read_parquet(NORM / f"{prefix}source{i}.parquet", columns=["entity_id", "country", "name_core", "name_norm", "has_addr"]) for i in (2, 3)])
            .filter(~pl.col("has_addr")))
-    if split != "test":  # eval / ranker-train queries are subsets of the train files
+    if split != "test":  # eval / ranker-train / trainall queries are subsets of the train files
         q = q.join(pl.read_parquet(NORM / f"{split}_queries.parquet"), on="entity_id", how="semi")
     q = q.rename({"entity_id": "rec"})
     if split == "test":

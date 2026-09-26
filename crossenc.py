@@ -15,6 +15,13 @@ Stage 1 is any saved ranker (ER_STAGE1, default the deployed one); the feature f
 
 Environment knobs: ER_STAGE1, ER_CE_BAND="0.05,0.99", ER_CE_TOPK=2, ER_CE_SAMPLE (fraction of train records to mine),
 ER_CE_STEPS (stop training early: smoke test), ER_CE_MODEL_DIR, ER_CE_MAX_PAIRS (scoring cap: smoke test).
+Reranker variants (a pretrained reranker as ER_CE_BASE, e.g. BAAI/bge-reranker-v2-m3):
+  ER_CE_TEXT=joint|name|addr   what the model reads: name | address (default), the name only, or the address only -> separate name / address rerankers
+  ER_CE_LOSS=bce|listwise      bce: one pair at a time (default); listwise: softmax over one record's candidates (its true owner + hard negatives),
+                               the contrastive objective: the owner must outrank the look-alikes
+  ER_CE_NEG=2                  hard negatives mined per record (use 6 for listwise) above the stage-1 probability ER_CE_NEG_MINP=0.05 (0 = always the top ones)
+  ER_CE_GROUP=8                candidates per listwise group at most
+  ER_CE_MAXLEN=128             token limit (name-only texts need far less)
 Nothing here is trained by the pipeline until `train` is run explicitly.
 """
 import math
@@ -36,7 +43,12 @@ CE_DIR = ROOT / "models" / os.environ.get("ER_CE_MODEL_DIR", "ce_er")
 STAGE1 = ROOT / "models" / os.environ.get("ER_STAGE1", "ranker_final_backup.txt")
 BAND = tuple(float(x) for x in os.environ.get("ER_CE_BAND", "0.05,0.99").split(","))
 TOPK = int(os.environ.get("ER_CE_TOPK", 2))
-MAX_LEN = 128
+MAX_LEN = int(os.environ.get("ER_CE_MAXLEN", 128))
+TEXT = os.environ.get("ER_CE_TEXT", "joint")
+LOSS = os.environ.get("ER_CE_LOSS", "bce")
+NEG_PER_REC = int(os.environ.get("ER_CE_NEG", 2))
+NEG_MINP = float(os.environ.get("ER_CE_NEG_MINP", 0.05))   # a wrong candidate counts as a hard negative above this stage-1 probability (0 = the top-NEG wrong ones of every record)
+GROUP = int(os.environ.get("ER_CE_GROUP", 8))
 ADDR_ONLY = os.environ.get("ER_CE_ADDR_ONLY", "0") == "1"   # separate pipelines: the cross-encoder only sees records WITH an address (~1.9M fewer test pairs)
 BATCH = int(os.environ.get("ER_CE_BATCH", 64))              # 64 fits a 6 GB card, 128 a 24 GB card
 SCORE_BATCH = int(os.environ.get("ER_CE_SCORE_BATCH", 256))
@@ -54,6 +66,10 @@ def entity_text(prefix: str, ids: pl.DataFrame) -> pl.DataFrame:
     """entity_id, text = 'name | address' in the original script (normalized, states appended)."""
     d = pl.concat([pl.read_parquet(NORM / f"{prefix}source{i}.parquet", columns=["entity_id", "name_norm", "addr_norm"]).join(ids, on="entity_id", how="semi")
                    for i in (1, 2, 3)])
+    if TEXT == "name":
+        return d.select("entity_id", pl.col("name_norm").fill_null("").alias("text"))
+    if TEXT == "addr":
+        return d.select("entity_id", pl.col("addr_norm").fill_null("").alias("text"))
     return d.select("entity_id", pl.concat_str([pl.col("name_norm"), pl.lit(" | "), pl.col("addr_norm")]).alias("text"))
 
 
@@ -77,10 +93,15 @@ def mine():
     feat = feat.with_columns(pl.Series("p", stage1_probs(feat)))
     pos, neg = feat.filter(pl.col("label") == 1), feat.filter(pl.col("label") == 0)
     hard_pos = pos.filter(pl.col("p") < 0.90).with_columns(pl.lit(1).alias("hard"))
-    easy_pos = pos.filter(pl.col("p") >= 0.90).sample(n=min(hard_pos.height, pos.height - hard_pos.height), seed=1).with_columns(pl.lit(0).alias("hard"))
-    hard_neg = (neg.filter(pl.col("p") > 0.05).sort("p", descending=True).group_by("rec", maintain_order=True).head(2)
+    if LOSS == "listwise":  # every group needs its true owner: all positives of the sampled records, each with its top-NEG wrong candidates
+        easy_pos = pos.filter(pl.col("p") >= 0.90).with_columns(pl.lit(0).alias("hard"))
+    else:
+        easy_pos = pos.filter(pl.col("p") >= 0.90).sample(n=min(hard_pos.height, pos.height - hard_pos.height), seed=1).with_columns(pl.lit(0).alias("hard"))
+    hard_neg = (neg.filter(pl.col("p") > NEG_MINP).sort("p", descending=True).group_by("rec", maintain_order=True).head(NEG_PER_REC)
                    .with_columns(pl.lit(1).alias("hard")))
     easy_neg = neg.filter(pl.col("p") <= 0.05).sample(n=min(hard_neg.height // 2 + 1, 200_000), seed=2).with_columns(pl.lit(0).alias("hard"))
+    if LOSS == "listwise":  # a listwise group only uses the record's own candidates: random easy negatives of other records add nothing
+        easy_neg = easy_neg.head(0)
     out = pl.concat([x.select("rec", "s1", "label", "hard") for x in (hard_pos, easy_pos, hard_neg, easy_neg)])
     out.write_parquet(NORM / f"cepairs{CE_TAG}.parquet")
     print(f"hard positives {hard_pos.height:,}  easy positives {easy_pos.height:,}  hard negatives {hard_neg.height:,}  "
@@ -96,6 +117,8 @@ def train():
         base_pairs = pl.concat([base_pairs, pl.read_parquet(NORM / f"cepairs{extra}.parquet")]).unique(subset=["rec", "s1"], keep="first", maintain_order=True)
     print(f"training pairs: {base_pairs.height:,}  (extra pair files: {os.environ.get('ER_CE_EXTRA_PAIRS', '-')}; init from: {os.environ.get('ER_CE_INIT', 'base model')})", flush=True)
     pairs = pair_texts(base_pairs, "").drop_nulls().sample(fraction=1.0, shuffle=True, seed=0)
+    if LOSS == "listwise":
+        return train_listwise(pairs)
     eff = BATCH * ACCUM
     steps_per_epoch = math.ceil(pairs.height / eff)
     steps_total = steps_per_epoch * EPOCHS
@@ -129,6 +152,64 @@ def train():
         run = 0.98 * run + 0.02 * loss.item() if step else loss.item()
         if step % 200 == 0:
             print(f"  step {step}/{max_steps}  loss {run:.4f}  ({time.time() - t0:.0f}s)", flush=True)
+    CE_DIR.mkdir(parents=True, exist_ok=True)
+    model.save_pretrained(CE_DIR); tok.save_pretrained(CE_DIR)
+    print("saved", CE_DIR, flush=True)
+
+
+def train_listwise(pairs: pl.DataFrame):
+    """Contrastive / listwise fine-tuning: for every record with a mined true owner and at least one hard negative, the model scores the group
+    [owner, negative 1, ..., negative k] and is trained with a softmax cross-entropy that asks for the owner to get the top score."""
+    import torch
+    import torch.nn.functional as F
+    from transformers import AutoModelForSequenceClassification, AutoTokenizer, get_linear_schedule_with_warmup
+    g = (pairs.sort("label", descending=True).group_by("rec", maintain_order=True)
+              .agg(pl.col("text_a").first(), pl.col("text_b"), pl.col("label"))
+              .filter((pl.col("label").list.first() == 1) & (pl.col("label").list.len() >= 2))
+              .with_columns(pl.col("text_b").list.head(GROUP)))
+    A, B = g["text_a"].to_list(), g["text_b"].to_list()
+    n = len(A)
+    per = max(1, BATCH // GROUP)                      # groups per micro-batch (about BATCH pairs)
+    eff = per * ACCUM
+    steps_per_epoch = math.ceil(n / eff)
+    max_steps = int(os.environ.get("ER_CE_STEPS", steps_per_epoch * EPOCHS))
+    print(f"listwise groups: {n:,} (one true owner + up to {GROUP - 1} hard negatives each); {steps_per_epoch} steps per epoch, {max_steps} steps", flush=True)
+    tok = AutoTokenizer.from_pretrained(BASE_MODEL, trust_remote_code=TRUST)
+    init = os.environ.get("ER_CE_INIT")
+    model = AutoModelForSequenceClassification.from_pretrained(str(ROOT / "models" / init) if init else BASE_MODEL, num_labels=1, trust_remote_code=TRUST).cuda()
+    opt = torch.optim.AdamW(model.parameters(), lr=float(os.environ.get("ER_CE_LR", 3e-5)), weight_decay=0.01)
+    sched = get_linear_schedule_with_warmup(opt, int(0.05 * max_steps), max_steps)
+    adt = torch.bfloat16 if DTYPE == "bf16" else torch.float16
+    scaler = torch.amp.GradScaler(enabled=adt == torch.float16)
+    rng = np.random.default_rng(0)
+    model.train()
+    t0, run, perm = time.time(), 0.0, None
+    for step in range(max_steps):
+        if step % steps_per_epoch == 0:
+            perm = rng.permutation(n)
+        opt.zero_grad(set_to_none=True)
+        for k in range(ACCUM):
+            idx = perm[(step % steps_per_epoch) * eff + k * per:(step % steps_per_epoch) * eff + (k + 1) * per]
+            if len(idx) == 0:
+                break
+            ta, tb, sizes = [], [], []
+            for i in idx:
+                ta += [A[i]] * len(B[i]); tb += B[i]; sizes.append(len(B[i]))
+            enc = tok(ta, tb, truncation=True, max_length=MAX_LEN, padding=True, return_tensors="pt").to("cuda")
+            with torch.autocast("cuda", dtype=adt):
+                logit = model(**enc).logits.squeeze(-1).float()
+            loss, o = 0.0, 0
+            for sz in sizes:  # the owner is entry 0 of every group
+                loss = loss + F.cross_entropy(logit[o:o + sz].unsqueeze(0), torch.zeros(1, dtype=torch.long, device=logit.device))
+                o += sz
+            loss = loss / len(sizes)
+            scaler.scale(loss / ACCUM).backward()
+        scaler.unscale_(opt)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        scaler.step(opt); scaler.update(); sched.step()
+        run = 0.98 * run + 0.02 * float(loss) if step else float(loss)
+        if step % 100 == 0:
+            print(f"  step {step}/{max_steps}  listwise loss {run:.4f}  ({time.time() - t0:.0f}s)", flush=True)
     CE_DIR.mkdir(parents=True, exist_ok=True)
     model.save_pretrained(CE_DIR); tok.save_pretrained(CE_DIR)
     print("saved", CE_DIR, flush=True)

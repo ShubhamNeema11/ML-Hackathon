@@ -139,8 +139,9 @@ def populations(feat: pl.DataFrame, w: dict):
     rec_tab = id_rec.filter(pl.col("rec_i") >= w["n1"]).join(gt.select("rec").with_columns(pl.lit(1).alias("own")), on="rec", how="left")
     orphan_h = rec_tab.filter(pl.col("own").is_null() & (pl.col("rec").hash(seed=7) % 10 == 0)).select("rec_i")
     held = pl.concat([owned_h, orphan_h]).with_columns(pl.lit(True).alias("is_h"))
+    extra = [pl.read_parquet(INSAMPLE / "trainall_queries.parquet").rename({"entity_id": "rec"})] if (INSAMPLE / "trainall_queries.parquet").exists() else []  # the no-address specialist's training records
     seen = pl.concat([pl.read_parquet(INSAMPLE / "train_queries.parquet").rename({"entity_id": "rec"}),
-                      pl.read_parquet(INSAMPLE / "eval_queries.parquet").rename({"entity_id": "rec"}), embed_records()]).unique().join(id_rec, on="rec").select("rec_i").with_columns(pl.lit(True).alias("seen"))
+                      pl.read_parquet(INSAMPLE / "eval_queries.parquet").rename({"entity_id": "rec"}), embed_records(), *extra]).unique().join(id_rec, on="rec").select("rec_i").with_columns(pl.lit(True).alias("seen"))
     feat = (feat.join(truth.select("rec_i", "s1_i").with_columns(pl.lit(1, pl.Int8).alias("label")), on=["rec_i", "s1_i"], how="left")
                 .with_columns(pl.col("label").fill_null(0))
                 .join(held, on="rec_i", how="left").join(seen, on="rec_i", how="left")

@@ -61,16 +61,21 @@ def held(d, key="early-stop half"):
 
 def numbers() -> str:
     rows = ["| model | tuned half | report half (no threshold tuned on it) |", "|---|---|---|"]
-    for label, f in (("ranker A (address records, no cross-encoder)", "decision_a.json"), ("ranker B (address records, + cross-encoder)", "decision_b.json")):
+    for label, f in (("ranker A (address records, no cross-encoder)", "decision_a.json"), ("ranker B (address records, + cross-encoder)", "decision_b.json"),
+                     ("ranker C (address records, + cross-encoder + name / address rerankers)", "decision_c.json")):
         d = load(f)
         rows.append(f"| {label} | {held(d, 'thr-half') or 'n/a'} | {held(d) or 'n/a'} |")
     fin = load("final.json")
+    g = load("pass2_gate.json")
+    if g:
+        rows.append(f"| pass 1 on the mirror (training records, full density) | | {round(g['pass1'], 4)} |")
+        rows.append(f"| pass 2 on the mirror ({'USED' if g['use'] else 'not used'}: needs > +{g['margin']}) | | {round(g['pass2'], 4)} |")
     na = load("decision_na.json")
     if na:
         rows.append(f"| whole held-out set, ONE model for everyone (baseline) | {held({'held': na.get('baseline_held', {})}, 'thr-half') or 'n/a'} | {held({'held': na.get('baseline_held', {})}) or 'n/a'} |")
         rows.append(f"| **whole held-out set, address model + no-address specialist (used)** | {held(na, 'thr-half') or 'n/a'} | {held(na) or 'n/a'} |")
     out = "\n".join(rows) + f"\n\nAddress model chosen: {fin.get('choice') if fin else 'n/a'}.  Decision rule used: `{ {k: v for k, v in (na or {}).items() if k in ('thr_addr', 'thr_noaddr', 'margin', 'margin_noaddr')} }`\n"
-    for name in ("embed_eval", "na_fit", "na_joint"):
+    for name in ("embed_eval", "ranker_fit_a", "ranker_fit_b", "ranker_fit_c", "na_fit", "na_joint", "pass2_fit"):
         p = L / f"{name}.log"
         if p.exists():
             keep = [ln for ln in p.read_text(errors="replace").splitlines() if re.search(r"RESULT|recall|F0\.5|orphan weight|union top", ln)]

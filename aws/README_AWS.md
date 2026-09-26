@@ -66,6 +66,21 @@ Estimated time on one g5.2xlarge (A10G 24 GB, 8 vCPU), from laptop timings (not 
 Cost assumes about $1.6/h on-demand in ap-southeast-2 plus about $1.5 of storage (the price could not be queried; spot is $0.84-0.91/h but the spot quota is 0).
 Budget $30 for reruns. Pieces that are CPU-bound (blocking, LightGBM) run slower on 8 vCPUs than on the laptop's 16 threads; if the 32-vCPU quota is approved, use a g5.8xlarge for the CPU stages.
 
+## The full run: `aws/run_full.sh` (SageMaker JupyterLab or EC2) — use this one
+
+One command trains what has to be trained, evaluates on the held-out entities, scores the test set and writes the final matching:
+address records -> ranker A -> cross-encoder -> ranker B -> name + address rerankers (bge-reranker-v2-m3, listwise loss on hard negatives) -> ranker C
+(A/B/C chosen on held-out data); no-address records -> TF-IDF blocking + own LightGBM on all ~310k no-address training records (no cross-encoder);
+then pass 2 (mirror over the training records, used only if it wins by > 0.0005), final files, report, validator. The e5 embedder is reused, not retrained.
+
+    git pull && bash aws/sagemaker_setup.sh            # must print READY
+    nohup bash aws/run_full.sh > run_full.out 2>&1 &    # tail -f run_full.out ; DRYRUN=1 prints the plan
+
+`RETRAIN` (default `ce,rankers,noaddr,rerank,pass2`) decides which weights are trained again; `main.py --retrain` moves those models and everything computed
+from them to `_replaced/<time>/` first, so an uploaded laptop `normalized/` + `models/` can never make a retrained step look done. `RERANK=0` / `PASS2=0` leave those parts out.
+Results: `$ER_ROOT/deliverables/` (matching_results.tsv, candidate_pairs.tsv, RUN_REPORT.md, logs.tgz, models_manifest.tsv).
+`aws/run_pipeline.sh` (below) is the older single-pipeline upgrade script; it does not know the two pipelines.
+
 ## Rules
 Only code and the provided data are used. No AWS AI service (Bedrock, Comprehend, Entity Resolution, ...) and no external data
 or API is involved, in line with the competition's fair-play rules. The pretrained model is multilingual-e5-small (MIT licence).
