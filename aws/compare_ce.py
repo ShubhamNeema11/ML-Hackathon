@@ -7,7 +7,7 @@ import os
 import sys
 from pathlib import Path
 
-import numpy as np
+import json
 import polars as pl
 
 N = Path(os.environ.get("ER_ROOT", ".")) / "normalized"
@@ -35,4 +35,9 @@ for name, col in ((ref, "a"), (new, "b")):
     x = d[col].to_numpy()
     print(f"{name:8s} AUC {auc(x):.5f}   1-AUC {1 - auc(x):.5f}   top-1 correct {top1(col):.4f}   "
           f"wrong-but-confident (label 0, score>0.9): {int(((y == 0) & (x > 0.9)).sum()):,}   missed (label 1, score<0.5): {int(((y == 1) & (x < 0.5)).sum()):,}")
-print("GO if the new model's 1-AUC is at least 20% lower and top-1 is not worse.")
+# gate (heuristic): the pilot is undertrained (under one epoch), so "not clearly worse" is enough to justify the full run
+res = {c: dict(one_minus_auc=1 - auc(d[c].to_numpy()), top1=top1(c)) for c in ("a", "b")}
+go = res["b"]["one_minus_auc"] <= 1.15 * res["a"]["one_minus_auc"] and res["b"]["top1"] >= res["a"]["top1"] - 0.005
+(N.parent / "logs").mkdir(exist_ok=True)
+(N.parent / "logs" / "pilot_gate.json").write_text(json.dumps(dict(ref=ref, new=new, go=bool(go), pairs=d.height, **{f"{k}_{m}": v for k, r in res.items() for m, v in r.items()})))
+print("GATE:", "GO (the pilot is at least on par with the small cross-encoder after under one epoch)" if go else "NO-GO (the pilot is clearly worse than the small cross-encoder; the full run is not started automatically)")

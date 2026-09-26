@@ -168,7 +168,6 @@ def decide_and_report(name: str, rt: pl.DataFrame, owned_h: pl.DataFrame, orphan
 # ------------------------------------------------------------------------------------------------ fit / apply
 def fit():
     import lightgbm as lgb
-    import ranker
     t0 = time.time()
     w = world()
     feat = build_features(load_pass1(), w)

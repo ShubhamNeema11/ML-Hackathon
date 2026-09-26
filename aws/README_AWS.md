@@ -37,20 +37,34 @@ The whole pipeline is `python main.py`. This page covers only what is specific t
 Normalization ~5 min - blocking (sparse + dense, all three query sets) ~1-1.5 h - e5 fine-tuning ~10-15 min - rankers A and B ~15-30 min
 in total - cross-encoder ~30-45 min - scoring the test set once or twice ~30-60 min. Plan for **4 to 6 hours** on a g5.8xlarge.
 
-## Upgrade run: big cross-encoder + pass-2 (after the laptop run; `aws/run_pipeline.sh`)
-Prerequisite: `normalized/` and `models/` of the laptop run (17 GB + 2 GB) in `$ER_ROOT` (default `/data/er_work`), the dataset in `/data/dataset`, `bash aws/setup.sh` done.
-Phases, each resumable, each with its own go/no-go number:
+## Upgrade run: big cross-encoder + pass-2 (`aws/run_pipeline.sh`, unattended and documented)
+Prerequisite: the laptop run's `normalized/` and `models/` in `$ER_ROOT` (default `/data/er_work`; `bash upload_to_s3.sh` uploads only what is needed, about 12-13 GB),
+the dataset in `/data/dataset`, `bash aws/setup.sh` done. Then, in tmux:
 
-| phase | what | est. time on g5.2xlarge | est. cost |
-|---|---|---|---|
-| `pilot` | mine round-3 pairs, train the big cross-encoder for 1,500 steps, score the held-out band, compare with the small one | 0.5 h | ~$1 |
-| `bigce` | full training (2 epochs), score train/eval bands, LightGBM B4 (both cross-encoders), held-out comparison with B2 | 3-4 h | ~$5 |
-| `mirror` | the test-time pipeline over the training records (full-density table for pass 2), P1=b2 or b4 | 4-7 h | ~$8 |
-| `pass2` | fit pass 2, held-out comparison with pass 1 (same procedure) | 1 h | ~$1.5 |
-| `finish` | real test set: big-CE scores, pass-1 scores, pass 2, submission files, validator | 3-4 h | ~$5 |
+    AUTO_STOP=1 S3_OUT=s3://<bucket>/er_results bash aws/run_pipeline.sh all      # add LEAN=1 to skip the big cross-encoder
 
-Total about 12-17 h, **$20-30** on-demand plus ~$3 storage; budget $40 for reruns. Use `P1=b4 bash aws/run_pipeline.sh mirror|pass2|finish` only when `bigce` says B4 beats B2.
-The output goes to `$ER_ROOT/output_pass2/` and never replaces the earlier submission.
+`all` runs pilot -> big cross-encoder -> mirror -> pass 2 -> real test set, with three automatic gates (a step only feeds the next if it earned it):
+pilot vs the small cross-encoder, B4 vs B2 (> 0.0005 on the half no threshold was tuned on), pass 2 vs pass 1 (> 0.0005, same procedure).
+It resumes where it stopped if you run the same command again, and ends with `$ER_ROOT/deliverables/`:
+`matching_results.tsv`, `candidate_pairs.tsv`, `RUN_REPORT.md` (choices, held-out numbers, per-step timeline, cost estimate, sanity checks, environment), `logs.tgz`, `models_manifest.tsv`.
+`AUTO_STOP=1` copies that to `S3_OUT` and stops the instance (2 min after success, 30 min after a failure; `sudo shutdown -c` cancels), so no idle billing.
+`DRYRUN=1 bash aws/run_pipeline.sh all` prints every command without running anything.
+
+Estimated time on one g5.2xlarge (A10G 24 GB, 8 vCPU), from laptop timings (not measured on AWS):
+
+| phase | what | time |
+|---|---|---|
+| `pilot` | round-3 hard pairs, big cross-encoder for 1,500 steps, score the held-out band, gate | 0.5 h |
+| `bigce` | full training (2 epochs), score train/eval bands, B4, gate. The CPU-only mirror blocking runs alongside | 2 h |
+| `mirror` | test-time pipeline over the training records (remainder after the overlap) | 3 h |
+| `pass2` | fit pass 2, gate | 0.5 h |
+| `finish` | real test set: scores, pass 2, files, validator | 2.75 h |
+| **full run** | | **about 9 h, about $16** (range $11-22) |
+| **LEAN=1** (no big cross-encoder) | mirror 3.2 h + pass 2 0.5 h + finish 1.4 h | **about 5 h, about $9** |
+| pilot NO-GO | pilot + lean | about 5.5 h, about $10 |
+
+Cost assumes about $1.6/h on-demand in ap-southeast-2 plus about $1.5 of storage (the price could not be queried; spot is $0.84-0.91/h but the spot quota is 0).
+Budget $30 for reruns. Pieces that are CPU-bound (blocking, LightGBM) run slower on 8 vCPUs than on the laptop's 16 threads; if the 32-vCPU quota is approved, use a g5.8xlarge for the CPU stages.
 
 ## Rules
 Only code and the provided data are used. No AWS AI service (Bedrock, Comprehend, Entity Resolution, ...) and no external data
