@@ -63,7 +63,7 @@ def train():
 def encode(model, txt: list[str]) -> torch.Tensor:
     # sort by length so each batch pads little; restore order afterwards
     order = np.argsort([len(s) for s in txt])
-    emb = model.encode([txt[i] for i in order], batch_size=int(os.environ.get("ER_ENCODE_BATCH", 1024)), convert_to_tensor=True,
+    emb = model.encode([txt[i] for i in order], batch_size=int(os.environ.get("ER_ENCODE_BATCH", 512)), convert_to_tensor=True,
                        normalize_embeddings=True, show_progress_bar=False).half()
     out = torch.empty_like(emb)
     out[torch.as_tensor(order, device=emb.device)] = emb
@@ -71,7 +71,7 @@ def encode(model, txt: list[str]) -> torch.Tensor:
 
 
 Q_CHUNK = 200_000
-SEARCH_BATCH = int(os.environ.get("ER_SEARCH_BATCH", 128))   # queries per GPU matmul: 128 fits a 6 GB card, 1024 a 24 GB card
+SEARCH_BATCH = int(os.environ.get("ER_SEARCH_BATCH", 64))   # queries per GPU matmul: 128 fits a 6 GB card, 1024 a 24 GB card
 
 
 def search(s1: pl.DataFrame, queries, model, top_k: int = TOP_K, out_dir: Path | None = None):
