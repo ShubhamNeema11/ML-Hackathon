@@ -21,7 +21,7 @@ import numpy as np
 import polars as pl
 
 from block import CHUNK, NORM, ROOT
-from ranker import CE_TAG, DECISION_PATH, MODEL_PATH, add_extras, join_ce, load_extras, merge_channels, read_texts, retrieval_features, string_features
+from ranker import CE2_TAG, CE_TAG, DECISION_PATH, MODEL_PATH, add_extras, join_ce, load_extras, merge_channels, read_texts, retrieval_features, string_features
 
 OUT = Path(os.environ.get("ER_OUT", ROOT / "output"))  # ER_OUT: write elsewhere (tests)
 PRED = Path(os.environ.get("ER_PRED", NORM / "pred"))
@@ -64,6 +64,9 @@ def score():
     model = lgb.Booster(model_file=str(MODEL_PATH))
     cols = model.feature_name()  # works for the old 28/29-feature models and the new ones alike
     ce = pl.read_parquet(NORM / f"ce_test{CE_TAG}.parquet") if os.environ.get("ER_CE", "0") == "1" and (NORM / f"ce_test{CE_TAG}.parquet").exists() else None
+    ce2 = pl.read_parquet(NORM / f"ce_test{CE2_TAG}.parquet") if CE2_TAG and os.environ.get("ER_CE", "0") == "1" and (NORM / f"ce_test{CE2_TAG}.parquet").exists() else None
+    if any(c.startswith("ce2_") for c in cols) and ce2 is None:
+        raise SystemExit(f"{MODEL_PATH.name} uses second cross-encoder features: set ER_CE=1, ER_CE2_TAG and provide normalized/ce_test{CE2_TAG}.parquet")
     if any(c.startswith("ce_") for c in cols) and ce is None:  # the model was trained with cross-encoder features
         raise SystemExit(f"{MODEL_PATH.name} uses cross-encoder features: set ER_CE=1 and provide normalized/ce_test{CE_TAG}.parquet "
                          "(python crossenc.py score test); scoring without them would silently degrade the predictions")
@@ -95,6 +98,8 @@ def score():
         c = retrieval_features(add_extras(c, ex))
         need = pl.concat([c.select(pl.col("rec").alias("entity_id")), c.select(pl.col("s1").alias("entity_id"))]).unique()
         f = join_ce(string_features(c, texts.join(need, on="entity_id", how="semi")), ce)
+        if ce2 is not None:
+            f = join_ce(f, ce2, "ce2")
         p = model.predict(f.select(cols).cast(pl.Float32).to_numpy())
         f = (f.select("rec", "s1").with_columns(pl.Series("p", p, dtype=pl.Float32))
               .join(id_rec, on="rec").join(id_s1, on="s1").select("rec_i", "s1_i", "p"))

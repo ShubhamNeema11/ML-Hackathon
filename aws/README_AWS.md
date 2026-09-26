@@ -37,6 +37,21 @@ The whole pipeline is `python main.py`. This page covers only what is specific t
 Normalization ~5 min - blocking (sparse + dense, all three query sets) ~1-1.5 h - e5 fine-tuning ~10-15 min - rankers A and B ~15-30 min
 in total - cross-encoder ~30-45 min - scoring the test set once or twice ~30-60 min. Plan for **4 to 6 hours** on a g5.8xlarge.
 
+## Upgrade run: big cross-encoder + pass-2 (after the laptop run; `aws/run_pipeline.sh`)
+Prerequisite: `normalized/` and `models/` of the laptop run (17 GB + 2 GB) in `$ER_ROOT` (default `/data/er_work`), the dataset in `/data/dataset`, `bash aws/setup.sh` done.
+Phases, each resumable, each with its own go/no-go number:
+
+| phase | what | est. time on g5.2xlarge | est. cost |
+|---|---|---|---|
+| `pilot` | mine round-3 pairs, train the big cross-encoder for 1,500 steps, score the held-out band, compare with the small one | 0.5 h | ~$1 |
+| `bigce` | full training (2 epochs), score train/eval bands, LightGBM B4 (both cross-encoders), held-out comparison with B2 | 3-4 h | ~$5 |
+| `mirror` | the test-time pipeline over the training records (full-density table for pass 2), P1=b2 or b4 | 4-7 h | ~$8 |
+| `pass2` | fit pass 2, held-out comparison with pass 1 (same procedure) | 1 h | ~$1.5 |
+| `finish` | real test set: big-CE scores, pass-1 scores, pass 2, submission files, validator | 3-4 h | ~$5 |
+
+Total about 12-17 h, **$20-30** on-demand plus ~$3 storage; budget $40 for reruns. Use `P1=b4 bash aws/run_pipeline.sh mirror|pass2|finish` only when `bigce` says B4 beats B2.
+The output goes to `$ER_ROOT/output_pass2/` and never replaces the earlier submission.
+
 ## Rules
 Only code and the provided data are used. No AWS AI service (Bedrock, Comprehend, Entity Resolution, ...) and no external data
 or API is involved, in line with the competition's fair-play rules. The pretrained model is multilingual-e5-small (MIT licence).

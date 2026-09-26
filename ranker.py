@@ -28,6 +28,7 @@ TEXT_COLS = ["entity_id", "name_core", "name_norm", "legal_form", "is_domain", "
 FEAT_CHUNK = 1_000_000
 MODEL_PATH = ROOT / "models" / os.environ.get("ER_MODEL", "ranker.txt")
 CE_TAG = os.environ.get("ER_CE_TAG", "")  # suffix of the cross-encoder score files (ce_<split><tag>.parquet)
+CE2_TAG = os.environ.get("ER_CE2_TAG", "")  # optional second cross-encoder (e.g. "_big"): ce2_score / ce2_gap_best next to the first one
 FEAT_TAG = os.environ.get("ER_FEAT_TAG", "")  # e.g. "_v2": feature files feat_train_v2.parquet, kept apart from v1
 # Telangana was split from Andhra Pradesh in 2014 and the sources disagree on Hyderabad-area addresses:
 # 177 of the 245 true pairs with different states are exactly AP vs TS, so the two compare as the same state.
@@ -144,26 +145,31 @@ _STRUCT = [f for f in structfeat.STRUCT_FEATURES
 FEATURES = FEATURES_BASE + (_STRUCT if os.environ.get("ER_STRUCT", "1") == "1" else [])
 # optional cross-encoder evidence (crossenc.py): NaN where a pair was not scored
 if os.environ.get("ER_CE", "0") == "1":
-    FEATURES = FEATURES + ["ce_score", "ce_gap_best"]
+    FEATURES = FEATURES + ["ce_score", "ce_gap_best"] + (["ce2_score", "ce2_gap_best"] if CE2_TAG else [])
 CATEGORICAL = [f for f in structfeat.CATEGORICAL if f in FEATURES]
 
 
 def attach_ce(f: pl.DataFrame, name: str) -> pl.DataFrame:
-    """ce_score = cross-encoder probability of a pair (null where it was not scored), ce_gap_best = best score of the record minus this one."""
-    p = NORM / f"ce_{name}{CE_TAG}.parquet"
+    """ce_score = cross-encoder probability of a pair (null where it was not scored), ce_gap_best = best score of the record minus this one.
+    With ER_CE2_TAG a second cross-encoder adds ce2_score / ce2_gap_best the same way."""
     if os.environ.get("ER_CE", "0") != "1":
         return join_ce(f, None)  # cross-encoder features are not part of this model
-    if not p.exists():  # ER_CE=1 asks for them: never fall back to silent NaNs
-        raise FileNotFoundError(f"ER_CE=1 but {p.name} is missing - run `python crossenc.py score {name}` first (or unset ER_CE)")
-    return join_ce(f, pl.read_parquet(p))
+    for tag, col in ((CE_TAG, "ce"), (CE2_TAG, "ce2")):
+        if col == "ce2" and not tag:
+            break
+        p = NORM / f"ce_{name}{tag}.parquet"
+        if not p.exists():  # ER_CE=1 asks for them: never fall back to silent NaNs
+            raise FileNotFoundError(f"ER_CE=1 but {p.name} is missing - run `python crossenc.py score {name}` first (or unset ER_CE)")
+        f = join_ce(f, pl.read_parquet(p), col)
+    return f
 
 
-def join_ce(f: pl.DataFrame, ce: pl.DataFrame | None) -> pl.DataFrame:
-    """Attach cross-encoder columns (all null when ce is None or the pair was not scored)."""
+def join_ce(f: pl.DataFrame, ce: pl.DataFrame | None, col: str = "ce") -> pl.DataFrame:
+    """Attach cross-encoder columns <col>_score / <col>_gap_best (all null when ce is None or the pair was not scored)."""
     if ce is None:
-        return f.with_columns(pl.lit(None, pl.Float32).alias("ce_score"), pl.lit(None, pl.Float32).alias("ce_gap_best"))
-    f = f.join(ce.select("rec", "s1", pl.col("ce_score").cast(pl.Float32)), on=["rec", "s1"], how="left")
-    return f.with_columns((pl.col("ce_score").max().over("rec") - pl.col("ce_score")).alias("ce_gap_best"))
+        return f.with_columns(pl.lit(None, pl.Float32).alias(f"{col}_score"), pl.lit(None, pl.Float32).alias(f"{col}_gap_best"))
+    f = f.join(ce.select("rec", "s1", pl.col("ce_score").cast(pl.Float32).alias(f"{col}_score")), on=["rec", "s1"], how="left")
+    return f.with_columns((pl.col(f"{col}_score").max().over("rec") - pl.col(f"{col}_score")).alias(f"{col}_gap_best"))
 
 
 def build_features(name: str):

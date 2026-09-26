@@ -29,7 +29,9 @@ import polars as pl
 from block import NORM, ROOT, ground_truth
 from ranker import CE_TAG, FEAT_TAG, load_extras
 
-BASE_MODEL = "intfloat/multilingual-e5-small"   # MIT licence, 118M parameters
+BASE_MODEL = os.environ.get("ER_CE_BASE", "intfloat/multilingual-e5-small")   # default: MIT licence, 118M parameters
+# larger options (Apache-2.0 / MIT, all <= 8B): BAAI/bge-reranker-v2-m3 (568M), intfloat/multilingual-e5-large (560M), microsoft/mdeberta-v3-base (MIT)
+TRUST = os.environ.get("ER_CE_TRUST_REMOTE_CODE", "0") == "1"   # gte-multilingual-reranker-base needs its own modelling code
 CE_DIR = ROOT / "models" / os.environ.get("ER_CE_MODEL_DIR", "ce_er")
 STAGE1 = ROOT / "models" / os.environ.get("ER_STAGE1", "ranker_final_backup.txt")
 BAND = tuple(float(x) for x in os.environ.get("ER_CE_BAND", "0.05,0.99").split(","))
@@ -38,6 +40,8 @@ MAX_LEN = 128
 BATCH = int(os.environ.get("ER_CE_BATCH", 64))              # 64 fits a 6 GB card, 128 a 24 GB card
 SCORE_BATCH = int(os.environ.get("ER_CE_SCORE_BATCH", 256))
 EPOCHS = int(os.environ.get("ER_CE_EPOCHS", 1))                # passes over the mined pairs
+ACCUM = int(os.environ.get("ER_CE_ACCUM", 1))                  # micro-batches per optimiser step (effective batch = BATCH * ACCUM)
+DTYPE = os.environ.get("ER_CE_DTYPE", "fp16")                  # "bf16" on Ampere+ cards (A10G, A100): no loss scaling needed, safer for large models
 
 
 def stage1_probs(feat: pl.DataFrame) -> np.ndarray:
@@ -89,28 +93,33 @@ def train():
         base_pairs = pl.concat([base_pairs, pl.read_parquet(NORM / f"cepairs{extra}.parquet")]).unique(subset=["rec", "s1"], keep="first", maintain_order=True)
     print(f"training pairs: {base_pairs.height:,}  (extra pair files: {os.environ.get('ER_CE_EXTRA_PAIRS', '-')}; init from: {os.environ.get('ER_CE_INIT', 'base model')})", flush=True)
     pairs = pair_texts(base_pairs, "").drop_nulls().sample(fraction=1.0, shuffle=True, seed=0)
-    steps_per_epoch = math.ceil(pairs.height / BATCH)
+    eff = BATCH * ACCUM
+    steps_per_epoch = math.ceil(pairs.height / eff)
     steps_total = steps_per_epoch * EPOCHS
     max_steps = int(os.environ.get("ER_CE_STEPS", steps_total))
-    tok = AutoTokenizer.from_pretrained(BASE_MODEL)
+    tok = AutoTokenizer.from_pretrained(BASE_MODEL, trust_remote_code=TRUST)
     init = os.environ.get("ER_CE_INIT")  # warm start from an earlier round (a directory under models/)
-    model = AutoModelForSequenceClassification.from_pretrained(str(ROOT / "models" / init) if init else BASE_MODEL, num_labels=1).cuda()
+    model = AutoModelForSequenceClassification.from_pretrained(str(ROOT / "models" / init) if init else BASE_MODEL, num_labels=1, trust_remote_code=TRUST).cuda()
     opt = torch.optim.AdamW(model.parameters(), lr=float(os.environ.get("ER_CE_LR", 3e-5)), weight_decay=0.01)
     sched = get_linear_schedule_with_warmup(opt, int(0.05 * max_steps), max_steps)
-    scaler = torch.amp.GradScaler()
+    adt = torch.bfloat16 if DTYPE == "bf16" else torch.float16
+    scaler = torch.amp.GradScaler(enabled=adt == torch.float16)
     model.train()
     t0, run = time.time(), 0.0
     for step in range(max_steps):
         if step % steps_per_epoch == 0:  # a fresh shuffle for every epoch
             ep = pairs.sample(fraction=1.0, shuffle=True, seed=step // steps_per_epoch)
             a, b, y = ep["text_a"].to_list(), ep["text_b"].to_list(), ep["label"].to_numpy().astype(np.float32)
-        i = (step % steps_per_epoch) * BATCH
-        enc = tok(a[i:i + BATCH], b[i:i + BATCH], truncation=True, max_length=MAX_LEN, padding=True, return_tensors="pt").to("cuda")
-        with torch.autocast("cuda", dtype=torch.float16):
-            logit = model(**enc).logits.squeeze(-1)
-        loss = torch.nn.functional.binary_cross_entropy_with_logits(logit.float(), torch.from_numpy(y[i:i + BATCH]).cuda())
         opt.zero_grad(set_to_none=True)
-        scaler.scale(loss).backward()
+        for k in range(ACCUM):
+            i = (step % steps_per_epoch) * eff + k * BATCH
+            if i >= len(y):
+                break
+            enc = tok(a[i:i + BATCH], b[i:i + BATCH], truncation=True, max_length=MAX_LEN, padding=True, return_tensors="pt").to("cuda")
+            with torch.autocast("cuda", dtype=adt):
+                logit = model(**enc).logits.squeeze(-1)
+            loss = torch.nn.functional.binary_cross_entropy_with_logits(logit.float(), torch.from_numpy(y[i:i + BATCH]).cuda())
+            scaler.scale(loss / ACCUM).backward()
         scaler.unscale_(opt)
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         scaler.step(opt); scaler.update(); sched.step()
@@ -170,8 +179,8 @@ def score(split: str):
     if cap:
         pairs = pairs.head(cap)
     print(f"{split}: {pairs.height:,} pairs in the uncertain band / without address to score ({time.time() - t0:.0f}s)", flush=True)
-    tok = AutoTokenizer.from_pretrained(CE_DIR)
-    model = AutoModelForSequenceClassification.from_pretrained(CE_DIR).cuda().half().eval()
+    tok = AutoTokenizer.from_pretrained(CE_DIR, trust_remote_code=TRUST)
+    model = AutoModelForSequenceClassification.from_pretrained(CE_DIR, trust_remote_code=TRUST).cuda().to(torch.bfloat16 if DTYPE == "bf16" else torch.float16).eval()
     parts, step = [], 500_000
     for lo in range(0, pairs.height, step):
         pt = pair_texts(pairs.slice(lo, step), prefix).with_columns(pl.col("text_a").fill_null(""), pl.col("text_b").fill_null(""))
