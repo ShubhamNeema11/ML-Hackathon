@@ -37,6 +37,7 @@ TOPK = int(os.environ.get("ER_CE_TOPK", 2))
 MAX_LEN = 128
 BATCH = int(os.environ.get("ER_CE_BATCH", 64))              # 64 fits a 6 GB card, 128 a 24 GB card
 SCORE_BATCH = int(os.environ.get("ER_CE_SCORE_BATCH", 256))
+EPOCHS = int(os.environ.get("ER_CE_EPOCHS", 1))                # passes over the mined pairs
 
 
 def stage1_probs(feat: pl.DataFrame) -> np.ndarray:
@@ -83,19 +84,27 @@ def mine():
 def train():
     import torch
     from transformers import AutoModelForSequenceClassification, AutoTokenizer, get_linear_schedule_with_warmup
-    pairs = pair_texts(pl.read_parquet(NORM / f"cepairs{CE_TAG}.parquet"), "").drop_nulls().sample(fraction=1.0, shuffle=True, seed=0)
-    steps_total = math.ceil(pairs.height / BATCH)
+    base_pairs = pl.read_parquet(NORM / f"cepairs{CE_TAG}.parquet")
+    for extra in [t for t in os.environ.get("ER_CE_EXTRA_PAIRS", "").split(",") if t]:  # pair files of earlier rounds (tags), added to this round's
+        base_pairs = pl.concat([base_pairs, pl.read_parquet(NORM / f"cepairs{extra}.parquet")]).unique(subset=["rec", "s1"], keep="first", maintain_order=True)
+    print(f"training pairs: {base_pairs.height:,}  (extra pair files: {os.environ.get('ER_CE_EXTRA_PAIRS', '-')}; init from: {os.environ.get('ER_CE_INIT', 'base model')})", flush=True)
+    pairs = pair_texts(base_pairs, "").drop_nulls().sample(fraction=1.0, shuffle=True, seed=0)
+    steps_per_epoch = math.ceil(pairs.height / BATCH)
+    steps_total = steps_per_epoch * EPOCHS
     max_steps = int(os.environ.get("ER_CE_STEPS", steps_total))
     tok = AutoTokenizer.from_pretrained(BASE_MODEL)
-    model = AutoModelForSequenceClassification.from_pretrained(BASE_MODEL, num_labels=1).cuda()
-    opt = torch.optim.AdamW(model.parameters(), lr=3e-5, weight_decay=0.01)
+    init = os.environ.get("ER_CE_INIT")  # warm start from an earlier round (a directory under models/)
+    model = AutoModelForSequenceClassification.from_pretrained(str(ROOT / "models" / init) if init else BASE_MODEL, num_labels=1).cuda()
+    opt = torch.optim.AdamW(model.parameters(), lr=float(os.environ.get("ER_CE_LR", 3e-5)), weight_decay=0.01)
     sched = get_linear_schedule_with_warmup(opt, int(0.05 * max_steps), max_steps)
     scaler = torch.amp.GradScaler()
-    a, b, y = pairs["text_a"].to_list(), pairs["text_b"].to_list(), pairs["label"].to_numpy().astype(np.float32)
     model.train()
     t0, run = time.time(), 0.0
     for step in range(max_steps):
-        i = step * BATCH
+        if step % steps_per_epoch == 0:  # a fresh shuffle for every epoch
+            ep = pairs.sample(fraction=1.0, shuffle=True, seed=step // steps_per_epoch)
+            a, b, y = ep["text_a"].to_list(), ep["text_b"].to_list(), ep["label"].to_numpy().astype(np.float32)
+        i = (step % steps_per_epoch) * BATCH
         enc = tok(a[i:i + BATCH], b[i:i + BATCH], truncation=True, max_length=MAX_LEN, padding=True, return_tensors="pt").to("cuda")
         with torch.autocast("cuda", dtype=torch.float16):
             logit = model(**enc).logits.squeeze(-1)

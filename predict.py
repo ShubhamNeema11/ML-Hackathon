@@ -125,20 +125,41 @@ def write(threshold: float | None = None):
     names = ids["entity_id"]
     n_s1 = pl.read_parquet(NORM / "test_source1.parquet", columns=["entity_id"]).height  # S1 rows come first in ids
     parts = sorted(PRED.glob("part*.parquet"))
+    # Deadline fallback (ER_FALLBACK_PRED=<dir of an earlier model's score parts>): chunks that were not scored by the current
+    # model yet use the earlier model's probabilities with a plain threshold (ER_FALLBACK_THR, default 0.80).
+    fb_dir = os.environ.get("ER_FALLBACK_PRED")
+    fb_thr = float(os.environ.get("ER_FALLBACK_THR", 0.80))
+    fb_parts = []
+    if fb_dir:
+        have = {q.name for q in parts}
+        fb_parts = [q for q in sorted(Path(fb_dir).glob("part*.parquet")) if q.name not in have]
+        print(f"fallback: {len(parts)} chunks from the current model, {len(fb_parts)} chunks from {fb_dir} (threshold {fb_thr})", flush=True)
     best, pairs = [], []
-    for p in parts:
-        d = pl.read_parquet(p)
-        pairs.append(d.select("s1_i", "rec_i"))
-        d = d.sort("p", descending=True)
-        best.append(d.group_by("rec_i", maintain_order=True).agg(
-            pl.col("s1_i").first(), pl.col("p").first(), pl.col("p").get(1, null_on_oob=True).fill_null(0.0).alias("p2")))
+    for is_fb_group, group in ((False, parts), (True, fb_parts)):
+        for p in group:
+            is_fb = is_fb_group
+            try:
+                d = pl.read_parquet(p)
+            except Exception:  # a chunk file cut off mid-write (scorer stopped at the deadline): use the fallback for it
+                if not fb_dir:
+                    raise
+                print(f"  {p.name} unreadable, using the fallback scores for it", flush=True)
+                d = pl.read_parquet(Path(fb_dir) / p.name)
+                is_fb = True
+            pairs.append(d.select("s1_i", "rec_i"))
+            d = d.sort("p", descending=True)
+            best.append(d.group_by("rec_i", maintain_order=True).agg(
+                pl.col("s1_i").first(), pl.col("p").first(), pl.col("p").get(1, null_on_oob=True).fill_null(0.0).alias("p2")
+            ).with_columns(pl.lit(is_fb).alias("is_fb")))
     best = pl.concat(best)
     if dec is None:
         best = best.filter(pl.col("p") >= threshold)
     else:
         adr = has_addr[best["rec_i"].to_numpy() - n_s1_]  # S2/S3 records follow the S1 rows in the id table
+        pv, p2v, fbv = best["p"].to_numpy(), best["p2"].to_numpy(), best["is_fb"].to_numpy()
         thr = np.where(adr, dec["thr_addr"], dec["thr_noaddr"])
-        best = best.filter(pl.Series((best["p"].to_numpy() >= thr) & ((best["p"].to_numpy() - best["p2"].to_numpy()) >= dec["margin"])))
+        keep = np.where(fbv, pv >= fb_thr, (pv >= thr) & ((pv - p2v) >= dec["margin"]))
+        best = best.filter(pl.Series(keep))
     print(f"{'rule ' + str(dec) if dec else 'threshold ' + str(threshold)}: {best.height:,} records assigned an S1 owner ({time.time() - t0:.0f}s)", flush=True)
 
     def lists(pr: pl.DataFrame) -> pl.DataFrame:
