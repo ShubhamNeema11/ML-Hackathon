@@ -57,7 +57,7 @@ def candidates(name: str) -> pl.DataFrame:
 
 def load_extras(name: str) -> pl.DataFrame | None:
     """Name-only extra candidates (extras.py) of the records without an address; None when not built."""
-    p = NORM / "cand" / f"{name}_extra.parquet"
+    p = NORM / "cand" / f"{name}_extra{os.environ.get('ER_EXTRA_TAG', '')}.parquet"
     return pl.read_parquet(p) if p.exists() and os.environ.get("ER_EXTRAS", "1") == "1" else None
 
 
@@ -299,6 +299,8 @@ def fit(max_rows: int | None = None, out: Path = MODEL_PATH, hard: bool = True):
     import lightgbm as lgb
     tr = pl.read_parquet(NORM / f"feat_train{FEAT_TAG}.parquet", n_rows=max_rows)
     ev = pl.read_parquet(NORM / f"feat_eval{FEAT_TAG}.parquet", n_rows=max_rows)
+    if os.environ.get("ER_ADDR_ONLY", "0") == "1":  # separate pipelines: this model sees only records WITH an address (noaddr.py handles the others)
+        tr, ev = tr.filter(pl.col("q_has_addr") == 1), ev.filter(pl.col("q_has_addr") == 1)
     print(f"train pairs {tr.height:,} (pos {tr['label'].sum():,})   eval pairs {ev.height:,} (pos {ev['label'].sum():,})   features {len(FEATURES)}", flush=True)
     params = dict(objective="binary", learning_rate=0.05, num_leaves=127, min_data_in_leaf=200, feature_fraction=0.8,
                   bagging_fraction=0.8, bagging_freq=1, lambda_l2=1.0, verbose=-1, num_threads=int(os.environ.get("ER_THREADS", os.cpu_count() or 8)), max_bin=255)

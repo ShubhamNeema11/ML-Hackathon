@@ -16,6 +16,7 @@ Every stage is its own process (polars-heavy sparse work and torch GPU work segf
 `eval` = the held-out queries of `block.py eval` (falls back to the files of ablate_extra.py if they exist and the new ones do not).
 `train` = the ranker-training queries from `block.py train`.
 """
+import os
 import sys
 import time
 
@@ -23,7 +24,8 @@ import polars as pl
 
 from block import NORM, SparseIndex, load
 
-N_EXTRA = 5
+N_EXTRA = int(os.environ.get("ER_EXTRA_N", 5))   # ER_EXTRA_N / ER_EXTRA_TAG: deeper lists in a separate file (see noaddr.py)
+EXTRA_TAG = os.environ.get("ER_EXTRA_TAG", "")
 DEPTH = 30
 RRF = 60.0
 
@@ -108,7 +110,7 @@ def build(split: str):
     f = f.join(base, on=["rec", "s1"], how="left").filter(pl.col("in_base").is_null()).drop("in_base")
     f = f.sort("sc", descending=True).group_by("rec", maintain_order=True).head(N_EXTRA)
     f = f.with_columns(pl.int_range(1, pl.len() + 1).over("rec").cast(pl.Int8).alias("extra_rank")).select("rec", "s1", "extra_rank")
-    out = NORM / "cand" / f"{split}_extra.parquet"
+    out = NORM / "cand" / f"{split}_extra{EXTRA_TAG}.parquet"
     f.write_parquet(out)
     print(f"{split}: {f.height:,} extra candidates for {f['rec'].n_unique():,} of {ids.height:,} records without address -> {out}", flush=True)
 

@@ -37,6 +37,7 @@ STAGE1 = ROOT / "models" / os.environ.get("ER_STAGE1", "ranker_final_backup.txt"
 BAND = tuple(float(x) for x in os.environ.get("ER_CE_BAND", "0.05,0.99").split(","))
 TOPK = int(os.environ.get("ER_CE_TOPK", 2))
 MAX_LEN = 128
+ADDR_ONLY = os.environ.get("ER_CE_ADDR_ONLY", "0") == "1"   # separate pipelines: the cross-encoder only sees records WITH an address (~1.9M fewer test pairs)
 BATCH = int(os.environ.get("ER_CE_BATCH", 64))              # 64 fits a 6 GB card, 128 a 24 GB card
 SCORE_BATCH = int(os.environ.get("ER_CE_SCORE_BATCH", 256))
 EPOCHS = int(os.environ.get("ER_CE_EPOCHS", 1))                # passes over the mined pairs
@@ -147,7 +148,7 @@ def band_pairs(split: str) -> tuple[pl.DataFrame, str]:
         d = pl.scan_parquet(PRED / "*.parquet").collect().sort("p", descending=True)
         best = d.group_by("rec_i", maintain_order=True).agg(pl.col("p").first().alias("p1"))
         addr = has_addr[best["rec_i"].to_numpy() - n_s1]  # S2/S3 records follow the S1 rows in the id table
-        band = best.filter(pl.Series(((best["p1"].to_numpy() >= lo) & (best["p1"].to_numpy() < hi)) | ~addr)).select("rec_i")
+        band = best.filter(pl.Series(((best["p1"].to_numpy() >= lo) & (best["p1"].to_numpy() < hi)) | (~addr & ~ADDR_ONLY))).select("rec_i")
         top = (d.join(band, on="rec_i", how="semi").with_columns(pl.int_range(1, pl.len() + 1).over("rec_i").alias("r"))
                 .filter(pl.col("r") <= TOPK))
         del d
@@ -160,11 +161,11 @@ def band_pairs(split: str) -> tuple[pl.DataFrame, str]:
                  .with_columns(pl.Series("p", stage1_probs(feat)), pl.col("has_addr").cast(pl.Boolean)).sort("p", descending=True))
         del feat
         best = d.group_by("rec", maintain_order=True).agg(pl.col("p").first().alias("p1"), pl.col("has_addr").first())
-        band_ids = best.filter(((pl.col("p1") >= lo) & (pl.col("p1") < hi)) | ~pl.col("has_addr")).select("rec")
+        band_ids = best.filter(((pl.col("p1") >= lo) & (pl.col("p1") < hi)) | (~pl.col("has_addr") & (not ADDR_ONLY))).select("rec")
         pairs = (d.join(band_ids, on="rec", how="semi").with_columns(pl.int_range(1, pl.len() + 1).over("rec").alias("r"))
                   .filter(pl.col("r") <= TOPK).select("rec", "s1"))
         prefix = ""
-    ex = load_extras(split)  # name-only extras of the records without an address are scored too
+    ex = None if ADDR_ONLY else load_extras(split)  # name-only extras of the records without an address are scored too
     if ex is not None:
         pairs = pl.concat([pairs, ex.select("rec", "s1").join(band_ids, on="rec", how="semi")]).unique()
     return pairs, prefix
@@ -174,7 +175,8 @@ def score(split: str):
     import torch
     from transformers import AutoModelForSequenceClassification, AutoTokenizer
     t0 = time.time()
-    pairs, prefix = band_pairs(split)
+    pairs, prefix = band_pairs(split) if not os.environ.get("ER_CE_PAIRS") else (pl.read_parquet(os.environ["ER_CE_PAIRS"]).select("rec", "s1"), "test_" if split == "test" else "")
+    # ER_CE_PAIRS=<parquet of (rec, s1)>: score exactly these pairs (noaddr.py cascade) instead of the uncertain band
     cap = int(os.environ.get("ER_CE_MAX_PAIRS", 0))
     if cap:
         pairs = pairs.head(cap)

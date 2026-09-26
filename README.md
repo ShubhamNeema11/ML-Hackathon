@@ -82,6 +82,13 @@ Outputs: `output/matching_results.tsv` and `output/candidate_pairs.tsv`.
 Validate with the organisers' helper:
 `python utils/validate_submission.py --matching output/matching_results.tsv --candidate output/candidate_pairs.tsv --test-dir dataset/test`
 
+## Two pipelines: with and without an address
+
+Records without an address (about 3% of S2/S3) are ambiguous by name alone, so they get their own blocking and model (`blocking_noaddr.py`, `noaddr.py`):
+char 3-gram TF-IDF candidates (top-10 plus near-ties; held-out recall of the owner 83.5% -> ~93.8%), a separate small LightGBM and no cross-encoder.
+Records with an address keep the general ranker (`ER_ADDR_ONLY=1` fits it on them only) and the cross-encoder (`ER_CE_ADDR_ONLY=1`). See the docstring of `noaddr.py` for the commands.
+`stack.py` is an optional LightGBM + XGBoost + cross-encoder meta-model (measured gain: none).
+
 ## Method summary
 
 1. **Normalization** (`normalize.py`): fixes mojibake (ftfy), NFKC + casefold, strips accents on Latin letters only,

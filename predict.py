@@ -61,8 +61,12 @@ def score():
     dense_rec = dense["rec_i"]
     extras = load_extras("test")
     print(f"name-only extras: {0 if extras is None else extras.height:,} rows", flush=True)
-    model = lgb.Booster(model_file=str(MODEL_PATH))
-    cols = model.feature_name()  # works for the old 28/29-feature models and the new ones alike
+    if MODEL_PATH.suffix == ".pkl":  # stacked model (stack.py): LightGBM + XGBoost + cross-encoder score -> meta-model
+        from stack import Stack
+        model = Stack(MODEL_PATH)
+    else:
+        model = lgb.Booster(model_file=str(MODEL_PATH))
+    cols = model.feature_name() if hasattr(model, "feature_name") else model.cols  # works for the old 28/29-feature models and the new ones alike
     ce = pl.read_parquet(NORM / f"ce_test{CE_TAG}.parquet") if os.environ.get("ER_CE", "0") == "1" and (NORM / f"ce_test{CE_TAG}.parquet").exists() else None
     ce2 = pl.read_parquet(NORM / f"ce_test{CE2_TAG}.parquet") if CE2_TAG and os.environ.get("ER_CE", "0") == "1" and (NORM / f"ce_test{CE2_TAG}.parquet").exists() else None
     if any(c.startswith("ce2_") for c in cols) and ce2 is None:
@@ -100,7 +104,7 @@ def score():
         f = join_ce(string_features(c, texts.join(need, on="entity_id", how="semi")), ce)
         if ce2 is not None:
             f = join_ce(f, ce2, "ce2")
-        p = model.predict(f.select(cols).cast(pl.Float32).to_numpy())
+        p = model.predict(f) if MODEL_PATH.suffix == ".pkl" else model.predict(f.select(cols).cast(pl.Float32).to_numpy())
         f = (f.select("rec", "s1").with_columns(pl.Series("p", p, dtype=pl.Float32))
               .join(id_rec, on="rec").join(id_s1, on="s1").select("rec_i", "s1_i", "p"))
         f.write_parquet(out)
@@ -163,7 +167,8 @@ def write(threshold: float | None = None):
         adr = has_addr[best["rec_i"].to_numpy() - n_s1_]  # S2/S3 records follow the S1 rows in the id table
         pv, p2v, fbv = best["p"].to_numpy(), best["p2"].to_numpy(), best["is_fb"].to_numpy()
         thr = np.where(adr, dec["thr_addr"], dec["thr_noaddr"])
-        keep = np.where(fbv, pv >= fb_thr, (pv >= thr) & ((pv - p2v) >= dec["margin"]))
+        mg = np.where(adr, dec["margin"], dec.get("margin_noaddr", dec["margin"]))  # optional separate margin for records without an address (noaddr.py)
+        keep = np.where(fbv, pv >= fb_thr, (pv >= thr) & ((pv - p2v) >= mg))
         best = best.filter(pl.Series(keep))
     print(f"{'rule ' + str(dec) if dec else 'threshold ' + str(threshold)}: {best.height:,} records assigned an S1 owner ({time.time() - t0:.0f}s)", flush=True)
 
