@@ -187,11 +187,55 @@ def build_steps(root: Path, dataset: Path, skip_ce: bool, eval_frac: float = 0.0
         Step("write_submission", "write matching_results.tsv and candidate_pairs.tsv with the tuned decision rule",
              [["predict.py", "write"]], done=submission_done),
     ]
+    steps.append(Step("report", "run report + deliverables/ (final files, held-out numbers, timeline, logs)", [["aws/report_full.py"]],
+                      {"STATUS": "SUCCESS"}, done=lambda: False))
     steps.append(Step("validate", "organisers' validator on both output files",
                       [[str(validator), "--matching", str(root / "output" / "matching_results.tsv"),
                         "--candidate", str(root / "output" / "candidate_pairs.tsv"), "--test-dir", str(dataset / "test")]],
                       done=lambda: False, when=lambda: validator.exists()))
     return steps
+
+
+# --retrain: the weights of these components are trained again in this run; everything derived from them is moved aside so its steps re-run.
+# Everything else (normalized data, blocking and dense candidates, the other models) is reused as it is.
+RETRAIN_ARTIFACTS = {
+    "embed":   ["models/e5_er", "normalized/eval_dense.parquet", "normalized/cand/train_dense", "normalized/cand/test_dense",
+                "normalized/cand/eval_extra_dense.parquet", "normalized/cand/train_extra_dense.parquet", "normalized/cand/test_extra_dense.parquet"],
+    "ce":      ["models/ce_er", "normalized/cepairs.parquet", "normalized/ce_train.parquet", "normalized/ce_eval.parquet", "normalized/ce_test.parquet",
+                "normalized/feat_train_ce.parquet", "normalized/feat_eval_ce.parquet", "models/ranker_b.txt", "models/decision_b.json"],
+    "rankers": ["models/ranker_a.txt", "models/decision_a.json", "models/ranker_b.txt", "models/decision_b.json", "normalized/feat_train_s.parquet",
+                "normalized/feat_eval_s.parquet", "normalized/feat_train_ce.parquet", "normalized/feat_eval_ce.parquet"],
+    "noaddr":  ["models/noaddr_c.txt", "models/decision_na.json"],
+}
+# a component also invalidates what is computed from it (embedder -> candidates -> all features; rankers -> cross-encoder band; anything -> choice, scores, output)
+IMPLIES = {"embed": ["rankers", "ce", "noaddr"], "rankers": ["ce"], "ce": [], "noaddr": []}
+ALWAYS = ["models/final.json", "models/decision_na.json", "normalized/pred_a", "normalized/pred_b", "normalized/pred_na", "output"]
+
+
+def apply_retrain(root: Path, spec: str):
+    """Move the artifacts of the chosen components (and what depends on them) to <root>/_replaced/<time>/. A marker makes a resumed run skip this."""
+    marker = root / ".retrain_run"
+    if marker.exists():
+        print(f"--retrain: resuming the run started {marker.read_text().splitlines()[0]}", flush=True)
+        return
+    comps = set(c for c in spec.replace("all", "embed,ce,rankers,noaddr").split(",") if c)
+    unknown = comps - set(RETRAIN_ARTIFACTS)
+    if unknown:
+        sys.exit(f"--retrain: unknown component(s) {sorted(unknown)}; choose from {sorted(RETRAIN_ARTIFACTS)} or 'all'")
+    for c in list(comps):
+        comps |= set(IMPLIES[c])
+    dest = root / "_replaced" / time.strftime("%Y%m%d_%H%M%S")
+    paths = sorted({p for c in comps for p in RETRAIN_ARTIFACTS[c]} | set(ALWAYS))
+    moved = []
+    for rel in paths:
+        src = root / rel
+        if src.exists():
+            (dest / rel).parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(src), str(dest / rel))
+            moved.append(rel)
+    print(f"--retrain {sorted(comps)}: moved {len(moved)} earlier artifacts to {dest} ({', '.join(moved[:6])}{' ...' if len(moved) > 6 else ''}); their steps run again", flush=True)
+    (root / "logs").mkdir(exist_ok=True)
+    marker.write_text(time.strftime("%Y-%m-%d %H:%M:%S") + "\n" + ",".join(sorted(comps)) + "\n")
 
 
 def step_env(step: Step, root: Path, use_b: bool, skip_na: bool = False) -> dict:
@@ -242,7 +286,7 @@ def main():
     ap.add_argument("--dataset", default=os.environ.get("ER_DATASET") or DEFAULT_DATASET)
     ap.add_argument("--root", default=os.environ.get("ER_ROOT") or str(CODE), help="folder for normalized/, models/, output/, logs/")
     ap.add_argument("--list", action="store_true"); ap.add_argument("--dry-run", action="store_true")
-    ap.add_argument("--force", action="store_true"); ap.add_argument("--skip-ce", action="store_true"); ap.add_argument("--skip-na", action="store_true")
+    ap.add_argument("--force", action="store_true"); ap.add_argument("--skip-ce", action="store_true"); ap.add_argument("--skip-na", action="store_true"); ap.add_argument("--retrain", default="", help="components trained again in this run (comma list of embed,ce,rankers,noaddr or all); their old artifacts and everything derived from them are moved aside, the rest is reused")
     ap.add_argument("--from", dest="start"); ap.add_argument("--to", dest="stop"); ap.add_argument("--only")
     ap.add_argument("--no-preflight", action="store_true")
     ap.add_argument("--eval-frac", type=float, default=0.05, help="share of held-out records used as evaluation queries")
@@ -267,6 +311,8 @@ def main():
                     print(f"{'':22s}python {' '.join(c)}   {step_env(s, root, False, args.skip_na) or ''}")
         return
 
+    if args.retrain:
+        apply_retrain(root, args.retrain)
     autoconfigure()
     if not args.no_preflight:
         problems = preflight(dataset)
@@ -302,6 +348,8 @@ def main():
                     log_path = root / "logs" / f"{s.name}.log"
                     rc = run_cmd(s, argv, step_env(s, root, use_b, args.skip_na), log_path)
                     if rc != 0:
+                        with open(root / "logs" / "timeline.tsv", "a", encoding="utf-8") as tl:
+                            tl.write(f"{time.strftime('%Y-%m-%d %H:%M')}\t{s.name}\t{time.time() - t0:.0f}\tFAILED\n")
                         tail = "\n".join(log_path.read_text(errors="replace").strip().splitlines()[-15:])
                         print(f"!! {s.name} failed (exit {rc}); last log lines:\n{tail}\nfull log: {log_path}\n"
                               f"fix the cause and run `python main.py` again: finished steps are skipped.", flush=True)
@@ -309,6 +357,8 @@ def main():
             dt = time.time() - t0
             print(f"   {s.name} finished in {dt / 60:.1f} min", flush=True)
             summary.append((s.name, "ran", dt))
+            with open(root / "logs" / "timeline.tsv", "a", encoding="utf-8") as tl:
+                tl.write(f"{time.strftime('%Y-%m-%d %H:%M')}\t{s.name}\t{dt:.0f}\tok\n")
         except SystemExit:
             raise
         except Exception as e:

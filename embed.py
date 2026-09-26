@@ -22,7 +22,7 @@ from block import EVAL_K, NORM, ROOT, TOP_K, ground_truth, is_val_s1, recall_rep
 BASE_MODEL = "intfloat/multilingual-e5-small"
 MODEL_DIR = ROOT / "models" / "e5_er"
 MAX_LEN = 64
-N_TRAIN = 600_000
+N_TRAIN = int(os.environ.get("ER_EMBED_PAIRS", 600_000))   # one (record, owner) pair per S1 entity; a value above the number of S1 entities = all of them
 
 
 def texts(split: str, n: int) -> pl.DataFrame:

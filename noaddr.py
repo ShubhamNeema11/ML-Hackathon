@@ -245,7 +245,7 @@ def joint():
               f"   (TP {held['early-stop half']['tp']}, FP wrong {held['early-stop half']['fp_wrong_owner']}, FP orphan-w {held['early-stop half']['fp_orphan_weighted']:.0f})", flush=True)
     import json
     out = ranker.ROOT / "models" / os.environ.get("ER_DECISION", "decision_na.json")
-    out.write_text(json.dumps(res["B2 + no-address specialist"]), encoding="utf-8")
+    out.write_text(json.dumps(dict(res["B2 + no-address specialist"], baseline_held=res["B2 for everyone"]["held"], baseline_decision={k: v for k, v in res["B2 for everyone"].items() if k != "held"})), encoding="utf-8")
     print("wrote", out.name, flush=True)
 
 def apply():
