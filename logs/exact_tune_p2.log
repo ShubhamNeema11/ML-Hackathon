@@ -1,0 +1,2 @@
+pass 2, current rule (0.8, 0.7, 0.1, 0.1): exact half A 0.9883   half B 0.9887
+pass 2, tuned on the EXACT metric (half A) (0.65, 0.5, 0.3, 0.3): half A 0.9890   half B (not tuned on) 0.9891

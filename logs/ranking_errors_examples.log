@@ -1,0 +1,46 @@
+WITHOUT address: 10,065 ranking errors in the sample; wrong S1 and owner have the SAME core name: 85%; median p chosen 0.18, owner 0.08
+WITH address: 313 ranking errors in the sample; wrong S1 and owner have the SAME core name: 4%; median p chosen 0.73, owner 0.03
+
+=== examples, record WITHOUT an address
+  record : Golden College Ltd                       | -
+  chosen : Golden College                           | Plot No. G1-510, Tizara, Alwar, Rajasthan, Riico  p=0.18
+  owner  : Golden College                           | No1, 2 Floor Vijay Arcade, Ma Vaithiyalingam Sal  p=0.15
+
+  record : All Ace Aidvsory Inc.                    | -
+  chosen : All Ace Advisory Inc.                    | 114 Ravine Lane, North Barrington, IL  p=0.29
+  owner  : All Ace Advisory Inc.                    | 7421 Randallville Road, Urbana, NY  p=0.26
+
+  record : Solutions Sakshi Private Limited Center  | -
+  chosen : Solutions Sakshi Foods Private Limited   | C-1002, 10Th Floor, Purva Heights, Bgt Mn Rd, Bi  p=0.91
+  owner  : Solutions Sakshi Infratech Private Limit | C/O N.V.Manimaran, Krita, J Block G1, Kaspapuram  p=0.62
+
+  record : Future-Software Private                  | -
+  chosen : Future Software Private Limited          | Uttar Pradesh, Bandhu Bhujawan Lane, Mirzapur  p=0.03
+  owner  : Future Software Private Limited          | Flat No 302, Plot No 47, Bluestone Buckingham, G  p=0.02
+
+  record : MAA INEVSHMTENT PRIVATE LIMITED          | -
+  chosen : Maa Investment Pvt Ltd                   | 1854, Kolar Road, Bangarpetkarnataka, Karnataka  p=0.04
+  owner  : Maa Investment Private Limited           | Plot No. 304, Kasetty Hights, Ayyappa Society, M  p=0.01
+
+
+=== examples, record WITH an address
+  record : Rizaxylo                                 | C/O LAL BABU SINGH VILL&TOLA-SHEKHPURA BLOCK-MUS
+  chosen : Shiv Traders Private Limited             | C/O Lal Babu Singh Vill&Tola-Shekhpura Block-Mus  p=0.91
+  owner  : VBO Transport Private Limited            | C/O Lal Babu Singh Vill&Tola-Shekhpura Block-Mus  p=0.50
+
+  record : Dovaxylomira                             | 135th Avenue, PO Box 7959, Portland, Oregon
+  chosen : Nascimento, Hernandez and Gonsales Inc.  | 2207 135th Avenue, Portland, OR  p=0.62
+  owner  : Cinder Inc                               | Portland, OR, 1445 135th Avenue  p=0.60
+
+  record : RÍZAXYLO                                 | MOUNTAIN TOP LN, DEPOSIT, NY
+  chosen : Nexara Rain Inc                          | Deposit, 225 Mountain Top Lane, NY  p=0.77
+  owner  : Heartland Continental Etf, Corp          | Deposit, NY, 22 Mountain Top Lane  p=0.25
+
+  record : Private O8 Hfgd Limited                  | A-212, Vikas Marg, East, DL
+  chosen : Ojas Hospitality Private Limited         | D-212, S/F Vivek Vihar, Vivekanand Mahila Collag  p=0.05
+  owner  : OB Hand Private Limited                  | A-212, First Floor, Malhotra Complex, Shakarpur,  p=0.02
+
+  record : Onyxvio                                  | New No- 34, Old No-19, Shiv Mandir Gali Maujpur,
+  chosen : Clover Servicesprivate Private Limited   | New No- 34, Old No-19, Shiv Mandir Gali Maujpur,  p=0.88
+  owner  : Innovative Infra Private Limited         | New No- 34, Old No-19, Shiv Mandir Gali Maujpur,  p=0.22
+

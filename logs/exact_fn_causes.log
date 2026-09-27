@@ -1,0 +1,18 @@
+held-out true links: 766,438; missed: 23,856
+shape: (7, 4)
+┌─────────────────────────────────┬──────────┬───────┬───────┐
+│ cause                           ┆ has_addr ┆ n     ┆ share │
+│ ---                             ┆ ---      ┆ ---   ┆ ---   │
+│ str                             ┆ bool     ┆ u32   ┆ f64   │
+╞═════════════════════════════════╪══════════╪═══════╪═══════╡
+│ a owner NOT among candidates (… ┆ false    ┆ 1503  ┆ 0.063 │
+│ a owner NOT among candidates (… ┆ true     ┆ 607   ┆ 0.025 │
+│ b another S1 ranked above the … ┆ false    ┆ 10065 ┆ 0.422 │
+│ b another S1 ranked above the … ┆ true     ┆ 1269  ┆ 0.053 │
+│ c1 owner first, below threshol… ┆ false    ┆ 4312  ┆ 0.181 │
+│ c1 owner first, below threshol… ┆ true     ┆ 6049  ┆ 0.254 │
+│ c2 owner first, margin to 2nd … ┆ true     ┆ 51    ┆ 0.002 │
+└─────────────────────────────────┴──────────┴───────┴───────┘
+
+owner ranked first but rejected: p1 quantiles [0.121, 0.321, 0.54, 0.698, 0.775]   margin quantiles [0.054, 0.338, 0.653]
+owner ranked below another S1: owner rank [{'true_rank': 2, 'count': 3729}, {'true_rank': 3, 'count': 1578}, {'true_rank': 4, 'count': 894}, {'true_rank': 5, 'count': 591}, {'true_rank': 6, 'count': 479}]  owner p median 0.08  top p median 0.218
