@@ -36,9 +36,33 @@ FEAT_TAG = os.environ.get("ER_FEAT_TAG", "")  # e.g. "_v2": feature files feat_t
 STATE_CANON = {"ts": "ap"}
 
 
+# French addresses (test only; no training data): the generic normalizer reads "st" as "street" (French: saint), does not expand "r" / "all" / "ch",
+# keeps "No" / "N" house-number prefixes and does not know the departements, so even confident French matches reach only 93 median address
+# token-set similarity (US / India 100). ER_FR_ADDR=1 canonicalizes addr_latin of FRENCH rows only, at feature time; other countries are untouched.
+FR_ADDR_ABBR = {"r": "rue", "all": "allee", "ch": "chemin", "che": "chemin", "chem": "chemin", "bd": "boulevard", "bld": "boulevard",
+                "blvd": "boulevard", "boul": "boulevard", "av": "avenue", "ave": "avenue", "pl": "place", "imp": "impasse", "rte": "route",
+                "sq": "square", "fg": "faubourg", "fbg": "faubourg", "street": "saint", "st": "saint", "ste": "sainte", "crs": "cours", "qu": "quai"}
+FR_ADDR_DROP = {"no", "n", "nr", "hdf", "naq", "pdl", "ara", "bfc", "bre", "cvl", "cor", "ges", "idf", "nor", "occ", "pac", "paca",
+                "gironde", "nord", "pas de calais", "loire atlantique", "landes", "dordogne", "lot et garonne", "pyrenees atlantiques",
+                "charente", "charente maritime", "vienne", "haute vienne", "deux sevres", "creuse", "correze", "aisne", "oise", "somme",
+                "maine et loire", "mayenne", "sarthe", "vendee"}
+
+
+def _fr_addr(expr: pl.Expr) -> pl.Expr:
+    e = expr.fill_null("").str.to_lowercase().str.replace_all(r"[\-'()#°.]", " ")
+    segs = e.str.split(",").list.eval(pl.element().str.strip_chars().str.replace_all(r"\s+", " "))
+    segs = segs.list.eval(pl.element().filter(~pl.element().is_in(list(FR_ADDR_DROP)) & (pl.element() != "")))
+    toks = segs.list.eval(pl.element().str.split(" ").list.eval(
+        pl.element().replace(FR_ADDR_ABBR).filter(~pl.element().is_in(["no", "n", "nr"]) & (pl.element() != ""))).list.join(" "))
+    return toks.list.eval(pl.element().filter(pl.element() != "")).list.join(", ")
+
+
 def read_texts(prefix: str, i: int) -> pl.DataFrame:
     """Text columns of one source, with the state overlay from fix_states.py applied when it exists."""
-    d = pl.read_parquet(NORM / f"{prefix}source{i}.parquet", columns=TEXT_COLS)
+    fr = os.environ.get("ER_FR_ADDR", "1") == "1"
+    d = pl.read_parquet(NORM / f"{prefix}source{i}.parquet", columns=TEXT_COLS + (["country"] if fr else []))
+    if fr:
+        d = d.with_columns(pl.when(pl.col("country") == "France").then(_fr_addr(pl.col("addr_latin"))).otherwise(pl.col("addr_latin")).alias("addr_latin")).drop("country")
     fix = NORM / f"state_fix_{prefix}source{i}.parquet"
     if os.environ.get("ER_STATE_FIX", "1") == "1" and fix.exists():
         d = d.drop("state").join(pl.read_parquet(fix), on="entity_id", how="left").with_columns(pl.col("state").fill_null(""))
