@@ -95,7 +95,7 @@ def candidates(name: str) -> pl.DataFrame:
     """Union of both channels' top-K for a candidate set: 'train', 'test' (parts dirs) or 'eval' (held-out files)."""
     if name == "eval":
         sp = pl.read_parquet(NORM / "eval_sparse.parquet").filter(pl.col("sparse_rank") <= TOP_K)
-        de = pl.read_parquet(NORM / "eval_dense.parquet").filter(pl.col("dense_rank") <= TOP_K)
+        de = pl.read_parquet(os.environ.get("ER_EVAL_DENSE", NORM / "eval_dense.parquet")).filter(pl.col("dense_rank") <= TOP_K)   # ER_EVAL_DENSE: experiments
     else:
         sp = pl.read_parquet(NORM / "cand" / f"{name}_sparse" / "*.parquet")
         de = pl.read_parquet(NORM / "cand" / f"{name}_dense" / "*.parquet")

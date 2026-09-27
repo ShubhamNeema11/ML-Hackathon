@@ -64,8 +64,12 @@ def stage1_probs(feat: pl.DataFrame) -> np.ndarray:
 
 def entity_text(prefix: str, ids: pl.DataFrame) -> pl.DataFrame:
     """entity_id, text = 'name | address' in the original script (normalized, states appended)."""
-    d = pl.concat([pl.read_parquet(NORM / f"{prefix}source{i}.parquet", columns=["entity_id", "name_norm", "addr_norm"]).join(ids, on="entity_id", how="semi")
+    d = pl.concat([pl.read_parquet(NORM / f"{prefix}source{i}.parquet", columns=["entity_id", "country", "name_norm", "addr_norm"]).join(ids, on="entity_id", how="semi")
                    for i in (1, 2, 3)])
+    if os.environ.get("ER_FR_ADDR", "1") == "1":   # French rows only: canonical address text (ranker._fr_addr); no training data is French
+        from ranker import _fr_addr
+        d = d.with_columns(pl.when(pl.col("country") == "France").then(_fr_addr(pl.col("addr_norm"))).otherwise(pl.col("addr_norm")).alias("addr_norm"))
+    d = d.drop("country")
     if TEXT == "name":
         return d.select("entity_id", pl.col("name_norm").fill_null("").alias("text"))
     if TEXT == "addr":

@@ -72,6 +72,13 @@ def main():
                 d = base(i)
                 return d if i == 1 else d.with_columns(pl.when(pl.col("entity_id").is_in(list(qset))).then(damage_addr(pl.col("addr_latin"), pl.col("entity_id"))).otherwise(pl.col("addr_latin")).alias("addr_latin"))
             res[sc] = score(build_eval(fn), "French-style ADDRESS damage (what France2 fixes)")
+        elif sc == "dense_addr":   # the same address damage, ALSO in the embedder's text (eval dense search re-run by dense_damage.py)
+            os.environ["ER_EVAL_DENSE"] = str(NORM / "eval_dense_damaged.parquet")
+            def fn(i):
+                d = base(i)
+                return d if i == 1 else d.with_columns(pl.when(pl.col("entity_id").is_in(list(qset))).then(damage_addr(pl.col("addr_latin"), pl.col("entity_id"))).otherwise(pl.col("addr_latin")).alias("addr_latin"))
+            res[sc] = score(build_eval(fn), "French-style address damage in features AND embeddings")
+            del os.environ["ER_EVAL_DENSE"]
         elif sc == "name":
             def fn(i):
                 d = base(i)

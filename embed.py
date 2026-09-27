@@ -19,8 +19,9 @@ import torch
 
 from block import EVAL_K, NORM, ROOT, TOP_K, ground_truth, is_val_s1, recall_report
 
-BASE_MODEL = "intfloat/multilingual-e5-small"
-MODEL_DIR = ROOT / "models" / "e5_er"
+BASE_MODEL = os.environ.get("ER_EMBED_BASE", "intfloat/multilingual-e5-small")   # e.g. BAAI/bge-m3 (568M, MIT): needs a 24 GB card to fine-tune
+MODEL_DIR = ROOT / "models" / os.environ.get("ER_EMBED_DIR", "e5_er")
+PREFIX = "query: " if "e5" in BASE_MODEL.lower() else ""   # e5 models were trained with "query: "; bge-m3 takes plain text
 MAX_LEN = 64
 N_TRAIN = int(os.environ.get("ER_EMBED_PAIRS", 600_000))   # one (record, owner) pair per S1 entity; a value above the number of S1 entities = all of them
 
@@ -28,8 +29,11 @@ N_TRAIN = int(os.environ.get("ER_EMBED_PAIRS", 600_000))   # one (record, owner)
 def texts(split: str, n: int) -> pl.DataFrame:
     prefix = "" if split == "train" else "test_"
     d = pl.read_parquet(NORM / f"{prefix}source{n}.parquet", columns=["entity_id", "country", "name_norm", "addr_norm"])
+    if os.environ.get("ER_FR_ADDR", "1") == "1":   # French rows only (no training data has any): canonical address text, see ranker._fr_addr
+        from ranker import _fr_addr
+        d = d.with_columns(pl.when(pl.col("country") == "France").then(_fr_addr(pl.col("addr_norm"))).otherwise(pl.col("addr_norm")).alias("addr_norm"))
     return d.select("entity_id", "country",
-                    pl.concat_str([pl.lit("query: "), pl.col("name_norm"), pl.lit(" | "), pl.col("addr_norm")]).alias("text"))
+                    pl.concat_str([pl.lit(PREFIX), pl.col("name_norm"), pl.lit(" | "), pl.col("addr_norm")]).alias("text"))
 
 
 def train():
@@ -52,8 +56,9 @@ def train():
     model.max_seq_length = MAX_LEN
     loss = CachedMultipleNegativesRankingLoss(model, mini_batch_size=int(os.environ.get("ER_MINI_BATCH", 128)))  # 128 on a 6 GB card, 512 on 24 GB
     args = SentenceTransformerTrainingArguments(
-        output_dir=str(MODEL_DIR / "ckpt"), num_train_epochs=1, per_device_train_batch_size=int(os.environ.get("ER_TRAIN_BATCH", 512)),
-        learning_rate=5e-5, warmup_ratio=0.05, fp16=True, batch_sampler=BatchSamplers.NO_DUPLICATES,
+        output_dir=str(MODEL_DIR / "ckpt"), num_train_epochs=int(os.environ.get("ER_EMBED_EPOCHS", 1)), per_device_train_batch_size=int(os.environ.get("ER_TRAIN_BATCH", 512)),
+        learning_rate=float(os.environ.get("ER_EMBED_LR", 5e-5)), warmup_ratio=0.05, fp16=os.environ.get("ER_EMBED_BF16", "0") != "1",
+        bf16=os.environ.get("ER_EMBED_BF16", "0") == "1", batch_sampler=BatchSamplers.NO_DUPLICATES,
         logging_steps=100, save_strategy="no", dataloader_num_workers=0, report_to="none")
     SentenceTransformerTrainer(model=model, args=args, train_dataset=ds, loss=loss).train()
     model.save(str(MODEL_DIR))
