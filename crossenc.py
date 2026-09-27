@@ -231,7 +231,7 @@ def band_pairs(split: str) -> tuple[pl.DataFrame, str]:
         d = pl.scan_parquet(PRED / "*.parquet").collect().sort("p", descending=True)
         best = d.group_by("rec_i", maintain_order=True).agg(pl.col("p").first().alias("p1"))
         addr = has_addr[best["rec_i"].to_numpy() - n_s1]  # S2/S3 records follow the S1 rows in the id table
-        band = best.filter(pl.Series(((best["p1"].to_numpy() >= lo) & (best["p1"].to_numpy() < hi)) | (~addr & ~ADDR_ONLY))).select("rec_i")
+        band = best.filter(pl.Series(((best["p1"].to_numpy() >= lo) & (best["p1"].to_numpy() < hi)) | (~addr & (not ADDR_ONLY)))).select("rec_i")
         top = (d.join(band, on="rec_i", how="semi").with_columns(pl.int_range(1, pl.len() + 1).over("rec_i").alias("r"))
                 .filter(pl.col("r") <= TOPK))
         del d
