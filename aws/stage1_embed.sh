@@ -6,6 +6,8 @@
 #   cd ~/ML-Hackathon && git pull && bash aws/sagemaker_setup.sh      (READY; set NEED_GB=20 if the space is small)
 #   aws s3 sync s3://<bucket>/er_stage1 ~/er_stage1 --only-show-errors  (the folder made by stage1_upload.py on the laptop)
 #   nohup bash aws/stage1_embed.sh > stage1.out 2>&1 &    then: tail -f stage1.out
+#   (S3_OUT=s3://<bucket>/stage1_results also copies the results folder to S3)
+# Output: ~/er_stage1/stage1_results/  RESULT.txt (recall + verdict), stage1_train.log, stage1_eval.log, m3_er_model.tgz (the fine-tuned embedder)
 # Gate: the current fine-tuned e5-small reaches dense top-10 recall 0.9907 and union (sparse + dense top-10) 0.9921 on these held-out queries.
 # The new embedder is worth the full rebuild only if it beats that clearly (for example union >= 0.9935).
 set -uo pipefail
@@ -31,4 +33,27 @@ echo "$(date +%H:%M:%S) fine-tune $ER_EMBED_BASE -> $ER_ROOT/models/$ER_EMBED_DI
 echo "$(date +%H:%M:%S) held-out dense search + recall"
 python -u embed.py eval 2>&1 | tee "$ER_ROOT/logs/stage1_eval.log" | grep -E "sparse|dense|union|Error|Traceback"
 echo "reference (current fine-tuned e5-small): dense @10 0.9907, union top10 each 0.9921"
+# ---- results for download: $ER_ROOT/stage1_results/ (small) and the fine-tuned model as one archive
+OUT="$ER_ROOT/stage1_results"; mkdir -p "$OUT"
+cp -f "$ER_ROOT"/logs/stage1_*.log "$OUT/" 2>/dev/null
+python - "$ER_ROOT" <<'PY' | tee "$OUT/RESULT.txt"
+import re, sys
+from pathlib import Path
+log = (Path(sys.argv[1]) / "logs" / "stage1_eval.log").read_text(errors="replace")
+dense = re.search(r"^dense\s.*@10:([0-9.]+)", log, re.M)
+union = re.search(r"union top10 each: recall ([0-9.]+)", log)
+d, u = (float(dense.group(1)) if dense else None), (float(union.group(1)) if union else None)
+import os
+print(f"embedder: {os.environ.get('ER_EMBED_BASE')} fine-tuned on the training pairs (no test data)")
+print(f"held-out owner recall: dense top-10 {d}   union (sparse + dense top-10) {u}")
+print("current e5-small:      dense top-10 0.9907   union 0.9921")
+if u is None:
+    print("VERDICT: no recall found in logs/stage1_eval.log - see the log")
+else:
+    print("VERDICT:", "PASS - worth Stage 2 (union >= 0.9935)" if u >= 0.9935 else ("BORDERLINE - small gain, Stage 2 probably not worth 10-14 h" if u > 0.9921 else "FAIL - not better than the current embedder, stop here"))
+PY
+echo "$(date +%H:%M:%S) packing the fine-tuned model"
+tar czf "$OUT/${ER_EMBED_DIR}_model.tgz" -C "$ER_ROOT/models" --exclude=ckpt "$ER_EMBED_DIR" && ls -la "$OUT"
+[ -n "${S3_OUT:-}" ] && aws s3 sync "$OUT" "$S3_OUT" --only-show-errors && echo "copied to $S3_OUT"
+echo "results: $OUT  (RESULT.txt = verdict; *_model.tgz = the embedder, needed only for Stage 2)"
 echo "$(date +%H:%M:%S) STAGE 1 DONE"
