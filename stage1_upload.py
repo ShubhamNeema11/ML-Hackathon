@@ -4,7 +4,7 @@ import os, shutil
 from pathlib import Path
 REPO = Path(__file__).resolve().parent
 OUT = Path.home() / "Downloads" / "er_stage1_upload" / "er_stage1"
-files = [f"normalized/source{i}.parquet" for i in (1, 2, 3)] + ["normalized/eval_queries.parquet", "normalized/eval_sparse.parquet"]
+files = [f"normalized/source{i}.parquet" for i in (1, 2, 3)] + ["normalized/eval_queries.parquet", "normalized/eval_sparse.parquet", "normalized/cepairs_rr.parquet", "normalized/ce_eval_v2.parquet"]
 size = 0
 for rel in files:
     src, dst = REPO / rel, OUT / rel
