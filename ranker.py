@@ -199,6 +199,37 @@ if os.environ.get("ER_CE", "0") == "1":
 CATEGORICAL = [f for f in structfeat.CATEGORICAL if f in FEATURES]
 
 
+CODE_FEATS = ["legal_code_q", "legal_code_s", "state_code_q", "state_code_s"]
+CODES_SEEN = ROOT / "models" / "codes_seen.json"
+
+
+def code_dropout(x: np.ndarray, cols: list, seed: int = 20260927, record: bool = True) -> np.ndarray:
+    """ER_CODE_DROPOUT=<share>: set the country-specific code features to 0 ('unknown') on a random share of the TRAINING rows, so the model
+    keeps using known codes but does not break on unknown ones (an unseen country). Its own seed: never the sampling / mining seed (0)."""
+    share = float(os.environ.get("ER_CODE_DROPOUT", 0))
+    idx = [cols.index(c) for c in CODE_FEATS if c in cols]
+    if share <= 0 or not idx:
+        return x
+    if record:   # the ranker's training rows define the known code values (the specialist's subset must not overwrite them)
+        seen = {c: sorted(int(v) for v in np.unique(x[:, cols.index(c)]) if v > 0) for c in CODE_FEATS if c in cols}
+        CODES_SEEN.write_text(json.dumps(seen), encoding="utf-8")
+    m = np.random.default_rng(seed).random(len(x)) < share
+    for j in idx:
+        x[m, j] = 0
+    print(f"code dropout: {m.mean():.1%} of the training rows get unknown codes; code values seen in training -> {CODES_SEEN.name}", flush=True)
+    return x
+
+
+def unseen_codes_to_unknown(f: pl.DataFrame) -> pl.DataFrame:
+    """ER_CODE_UNSEEN=1: a code value that never occurred in training (a new country's regions / legal forms) becomes 0 = unknown,
+    which code dropout taught the model to handle. No country list: the known values come from the training data."""
+    if os.environ.get("ER_CODE_UNSEEN", "0") != "1" or not CODES_SEEN.exists():
+        return f
+    seen = json.loads(CODES_SEEN.read_text(encoding="utf-8"))
+    return f.with_columns([pl.when(pl.col(c).is_in(v) | (pl.col(c) == 0)).then(pl.col(c)).otherwise(0).cast(f.schema[c]).alias(c)
+                           for c, v in seen.items() if c in f.columns])
+
+
 def attach_ce(f: pl.DataFrame, name: str) -> pl.DataFrame:
     """ce_score = cross-encoder probability of a pair (null where it was not scored), ce_gap_best = best score of the record minus this one.
     With ER_CE2_TAG a second cross-encoder adds ce2_score / ce2_gap_best the same way."""
@@ -365,6 +396,7 @@ def fit(max_rows: int | None = None, out: Path = MODEL_PATH, hard: bool = True):
     if hard:
         w, keep = mine_hard(x, y, params)
         x, y = x[keep], y[keep]
+    x = code_dropout(x, FEATURES)
     dtr = lgb.Dataset(x, y, weight=w, feature_name=FEATURES, categorical_feature=CATEGORICAL or "auto", params={"max_bin": 255})
     dtr.construct()
     del x

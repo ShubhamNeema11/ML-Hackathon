@@ -20,6 +20,8 @@ import lightgbm as lgb
 import numpy as np
 import polars as pl
 
+import ranker as ranker_mod
+
 from block import CHUNK, DENSE_TAG, NORM, ROOT
 from ranker import CE2_TAG, CE3_TAG, CE_TAG, DECISION_PATH, MODEL_PATH, add_extras, join_ce, load_extras, merge_channels, read_texts, retrieval_features, string_features
 
@@ -109,6 +111,7 @@ def score():
             f = join_ce(f, ce2, "ce2")
         if ce3 is not None:
             f = join_ce(f, ce3, "ce3")
+        f = ranker_mod.unseen_codes_to_unknown(f)   # ER_CODE_UNSEEN=1: code values never seen in training -> unknown
         p = model.predict(f) if MODEL_PATH.suffix == ".pkl" else model.predict(f.select(cols).cast(pl.Float32).to_numpy())
         f = (f.select("rec", "s1").with_columns(pl.Series("p", p, dtype=pl.Float32))
               .join(id_rec, on="rec").join(id_s1, on="s1").select("rec_i", "s1_i", "p"))

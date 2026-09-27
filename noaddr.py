@@ -291,6 +291,7 @@ def apply():
     pout = Path(os.environ.get("ER_PRED_OUT", NORM / "pred_final_na"))
     tag = "_smoke" if os.environ.get("ER_NOADDR_LIMIT") else ""
     f = pl.read_parquet(NORM / f"feat_noaddr{TAGV}_test{tag}.parquet")
+    f = ranker.unseen_codes_to_unknown(f)
     p = lgb.Booster(model_file=str(MODEL)).predict(f.select(COLS).cast(pl.Float32).to_numpy())
     ids = ids_table()
     rows = (f.select("rec", "s1").with_columns(pl.Series("p", p, dtype=pl.Float32))
@@ -352,6 +353,8 @@ def fit():
     data = {}
     for k, d in parts.items():
         data[k] = (d.select(COLS).cast(pl.Float32).to_numpy(), d["label"].to_numpy())
+        if not k:   # training rows only (not the early-stop rows): optional code dropout, see ranker.code_dropout
+            data[k] = (ranker.code_dropout(data[k][0], COLS, record=False), data[k][1])
         parts[k] = None
         gc.collect()
     dtr = lgb.Dataset(data[False][0], data[False][1], feature_name=COLS, free_raw_data=True)
