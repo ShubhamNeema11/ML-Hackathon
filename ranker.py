@@ -57,12 +57,34 @@ def _fr_addr(expr: pl.Expr) -> pl.Expr:
     return toks.list.eval(pl.element().filter(pl.element() != "")).list.join(", ")
 
 
+FR_LEGAL_FORMS = ["sarl", "sas", "sasu", "eurl", "sa", "sci", "snc", "ei"]
+
+
+def _fr_names(d: pl.DataFrame) -> pl.DataFrame:
+    """French rows: legal forms written with dots (S.A.R.L -> 's a r l') or placed inside the name are taken out of name_core and fill
+    legal_form when it is empty (ER_FR_NAME=1). 37.8% of confident French matches had a legal form on one side only (US 33%, India 25%)."""
+    toks = pl.col("name_core").fill_null("").str.split(" ").list.eval(pl.element().filter(pl.element() != ""))
+    letters = toks.list.eval(pl.element().filter(pl.element().str.len_chars() == 1)).list.join("")
+    found = toks.list.eval(pl.element().filter(pl.element().is_in(FR_LEGAL_FORMS))).list.first()
+    dotted = letters.is_in(FR_LEGAL_FORMS)
+    hit = dotted | found.is_not_null()
+    new_core = toks.list.eval(pl.element().filter(~pl.element().is_in(FR_LEGAL_FORMS) & (pl.element().str.len_chars() > 1))).list.join(" ")
+    fr = pl.col("country") == "France"
+    return d.with_columns(
+        pl.when(fr & hit & (new_core != "")).then(new_core).otherwise(pl.col("name_core")).alias("name_core"),
+        pl.when(fr & hit & (pl.col("legal_form").fill_null("") == "")).then(pl.when(dotted).then(letters).otherwise(found)).otherwise(pl.col("legal_form")).alias("legal_form"))
+
+
 def read_texts(prefix: str, i: int) -> pl.DataFrame:
     """Text columns of one source, with the state overlay from fix_states.py applied when it exists."""
     fr = os.environ.get("ER_FR_ADDR", "1") == "1"
     d = pl.read_parquet(NORM / f"{prefix}source{i}.parquet", columns=TEXT_COLS + (["country"] if fr else []))
     if fr:
-        d = d.with_columns(pl.when(pl.col("country") == "France").then(_fr_addr(pl.col("addr_latin"))).otherwise(pl.col("addr_latin")).alias("addr_latin")).drop("country")
+        d = d.with_columns(pl.when(pl.col("country") == "France").then(_fr_addr(pl.col("addr_latin"))).otherwise(pl.col("addr_latin")).alias("addr_latin"))
+        if os.environ.get("ER_FR_NAME", "1") == "1":
+            d = _fr_names(d)
+        if os.environ.get("ER_FR_GENERIC", "1") != "1":   # the country column also switches on the French generic-word list in structfeat
+            d = d.drop("country")
     fix = NORM / f"state_fix_{prefix}source{i}.parquet"
     if os.environ.get("ER_STATE_FIX", "1") == "1" and fix.exists():
         d = d.drop("state").join(pl.read_parquet(fix), on="entity_id", how="left").with_columns(pl.col("state").fill_null(""))

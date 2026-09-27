@@ -62,8 +62,35 @@ def load_vocab() -> dict:
     return vocab
 
 
+FR_VOCAB_PATH = ROOT / "models" / "struct_vocab_fr.json"
+# French names use a small vocabulary: the top 100 words cover 63% of French S1 name tokens, in the range of the training list's coverage
+# (US 43%, India 57.5%); top 300 would cover 73% and blunt the rare-word decoy signal. The swap words seen in unsure French pairs
+# (societe, etablissements, compagnie, collectif, section, groupe, culturelle, association, developpement, services, publique) are all inside.
+N_GENERIC_FR = 100
+
+
+def fr_generic() -> list:
+    """The generic (= frequent) name words of French S1 entities, by the same rule as the training vocabulary (top N_GENERIC words of S1 names).
+    France has no training data, so its generic words were all counted as rare, distinctive words (a Societe <-> Etablissement swap looked like
+    a different business). Built once from the S1 file of the split that holds French entities (test) and stored next to struct_vocab.json."""
+    if FR_VOCAB_PATH.exists():
+        return json.loads(FR_VOCAB_PATH.read_text(encoding="utf-8"))
+    for f in ("test_source1.parquet", "source1.parquet"):
+        p = NORM / f
+        if p.exists():
+            s1 = pl.read_parquet(p, columns=["country", "name_core"]).filter(pl.col("country") == "France")
+            if s1.height:
+                break
+    else:
+        return []
+    words = (s1.select(pl.col("name_core").str.split(" ").alias("t")).explode("t").filter(pl.col("t").str.len_chars() >= 2)
+               .group_by("t").len().sort("len", descending=True).head(N_GENERIC_FR)["t"].to_list())
+    FR_VOCAB_PATH.write_text(json.dumps(words, ensure_ascii=False), encoding="utf-8")
+    return words
+
+
 def entity_lists(t: pl.DataFrame) -> pl.DataFrame:
-    """Adds the per-entity list / code columns. Needs addr_latin, name_core, legal_form, state."""
+    """Adds the per-entity list / code columns. Needs addr_latin, name_core, legal_form, state (and country for the French generic words)."""
     v = load_vocab()
     legal_idx = {x: i + 1 for i, x in enumerate(v["legal"])}
     # French legal forms never occur in training, so they all got code 0 ("no legal form"), which costs B2 about 0.006 on held-out data
@@ -85,6 +112,14 @@ def entity_lists(t: pl.DataFrame) -> pl.DataFrame:
         nums.alias("nums"), units.alias("units"), toks.alias("_toks"),
         pl.col("legal_form").fill_null("").replace_strict(legal_idx, default=0, return_dtype=pl.Int16).alias("legal_code"),
         pl.col("state").fill_null("").replace_strict(state_vocab(), default=0, return_dtype=pl.Int16).alias("state_code"))
+    if "country" in t.columns and os.environ.get("ER_FR_GENERIC", "1") == "1" and (t["country"] == "France").any():
+        gen_fr = sorted(set(generic) | set(fr_generic()))   # French rows: the training list plus the French one; other rows unchanged
+        fr = pl.col("country") == "France"
+        return t.with_columns(
+            pl.when(fr).then(pl.col("_toks").list.eval(pl.element().filter(pl.element().is_in(gen_fr))))
+              .otherwise(pl.col("_toks").list.eval(pl.element().filter(pl.element().is_in(generic)))).alias("tok_gen"),
+            pl.when(fr).then(pl.col("_toks").list.eval(pl.element().filter(~pl.element().is_in(gen_fr))))
+              .otherwise(pl.col("_toks").list.eval(pl.element().filter(~pl.element().is_in(generic)))).alias("tok_rare")).drop("_toks")
     return t.with_columns(
         pl.col("_toks").list.eval(pl.element().filter(pl.element().is_in(generic))).alias("tok_gen"),
         pl.col("_toks").list.eval(pl.element().filter(~pl.element().is_in(generic))).alias("tok_rare")).drop("_toks")
