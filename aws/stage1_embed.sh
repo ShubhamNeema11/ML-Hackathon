@@ -7,7 +7,8 @@
 #
 # SageMaker JupyterLab (GPU space, ml.g5.2xlarge or larger):
 #   cd ~/ML-Hackathon && git pull && bash aws/sagemaker_setup.sh      (READY; set NEED_GB=20 if the space is small)
-#   aws s3 sync s3://<bucket>/er_stage1 ~/er_stage1 --only-show-errors  (the folder made by stage1_upload.py on the laptop)
+#   aws s3 sync s3://<bucket>/er_stage1 ~/er_stage1 --only-show-errors  (the small folder made by stage1_upload.py on the laptop;
+#   the big source files are read from ~/er_work of the earlier upload, or uploaded too with stage1_upload.py --full)
 #   nohup bash aws/stage1_embed.sh > stage1.out 2>&1 &    then: tail -f stage1.out
 #   (S3_OUT=s3://<bucket>/stage1_results also copies the results folder to S3)
 # Output: ~/er_stage1/stage1_results/  RESULT.txt (embedder recall + verdict), logs, ce_eval_rrv.parquet (reranker held-out band scores:
@@ -24,14 +25,22 @@ GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head 
 BF16=$(python -c "import torch; print(1 if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 0)")
 if [ "${GPU_MB:-0}" -ge 30000 ]; then MB=128; ENC=1024; elif [ "${GPU_MB:-0}" -ge 20000 ]; then MB=64; ENC=512; else MB=16; ENC=256; fi
 echo "GPU: ${GPU_NAME:-none} (${GPU_MB:-0} MiB), bf16 $BF16 -> micro-batch $MB, encode batch $ENC"
-[ "${GPU_MB:-0}" -ge 14000 ] || { echo "a 568M embedder needs a GPU with at least ~15 GB to fine-tune; set ER_EMBED_BASE=intfloat/multilingual-e5-base for a smaller card"; exit 1; }
+[ "${GPU_MB:-0}" -ge 14000 ] || [ "${STAGE1_CHECK:-0}" = 1 ] || { echo "a 568M embedder needs a GPU with at least ~15 GB to fine-tune; set ER_EMBED_BASE=intfloat/multilingual-e5-base for a smaller card"; exit 1; }
 export ER_EMBED_BASE="${ER_EMBED_BASE:-BAAI/bge-m3}" ER_EMBED_DIR="${ER_EMBED_DIR:-m3_er}" ER_EMBED_BF16="${ER_EMBED_BF16:-$BF16}"
 export ER_TRAIN_BATCH="${ER_TRAIN_BATCH:-512}" ER_MINI_BATCH="${ER_MINI_BATCH:-$MB}" ER_EMBED_LR="${ER_EMBED_LR:-2e-5}" ER_EMBED_EPOCHS="${ER_EMBED_EPOCHS:-1}"
 export ER_ENCODE_BATCH="${ER_ENCODE_BATCH:-$ENC}" ER_SEARCH_BATCH="${ER_SEARCH_BATCH:-$ENC}"
-mkdir -p "$ER_ROOT/logs"
+mkdir -p "$ER_ROOT/logs" "$ER_ROOT/normalized"
+# the big source files are READ from the earlier work folder (~/er_work, uploaded before) through links; nothing there is written or changed
+SRC_WORK="${SRC_WORK:-$HOME/er_work}"
+for f in source1.parquet source2.parquet source3.parquet eval_queries.parquet; do
+  if [ ! -e "$ER_ROOT/normalized/$f" ] && [ -f "$SRC_WORK/normalized/$f" ]; then ln -s "$SRC_WORK/normalized/$f" "$ER_ROOT/normalized/$f" && echo "using $SRC_WORK/normalized/$f (read-only link)"; fi
+done
 for f in normalized/source1.parquet normalized/source2.parquet normalized/source3.parquet normalized/eval_queries.parquet normalized/eval_sparse.parquet normalized/cepairs_rr.parquet normalized/ce_eval_v2.parquet; do
   [ -f "$ER_ROOT/$f" ] || { echo "missing $ER_ROOT/$f (upload the stage-1 folder)"; exit 1; }
 done
+python -c "import torch, sys; sys.exit(0 if torch.cuda.is_available() else 1)" || { echo "torch cannot see the GPU (run bash aws/sagemaker_setup.sh first)"; exit 1; }
+python -c "from block import DATASET; import sys; p = DATASET / 'train' / 'train_ground_truth.tsv'; sys.exit(0 if p.exists() else print('missing', p) or 1)" || exit 1
+[ "${STAGE1_CHECK:-0}" = 1 ] && { echo "STAGE1 CHECK OK: all inputs found, GPU visible"; exit 0; }
 echo "$(date +%H:%M:%S) fine-tune $ER_EMBED_BASE -> $ER_ROOT/models/$ER_EMBED_DIR"
 [ -f "$ER_ROOT/models/$ER_EMBED_DIR/model.safetensors" ] || python -u embed.py train 2>&1 | tee "$ER_ROOT/logs/stage1_train.log" | grep -E "training pairs|loss|saved|Error|Traceback" 
 echo "$(date +%H:%M:%S) held-out dense search + recall"
