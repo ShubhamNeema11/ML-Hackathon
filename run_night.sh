@@ -47,7 +47,7 @@ step mirror_na_apply "$MN/pred_na/_DONE"                 "${M_ENV[@]}" ER_NA_TFI
 step pass2_fit       "$MIR/models/pass2.txt"             "${M_ENV[@]}" ER_PASS1="$MN/pred_na" ER_INSAMPLE_DIR="$N" python -u pass2.py fit
 echo; grep -h "RESULT\|pass 2 minus" "$R/logs/night_pass2_fit.log" | tail -3
 USE=$(python -c "
-import json; d = json.load(open(r'$MIR/models/decision_pass2.json'))
+import json; d = json.load(open('fulltrain/models/decision_pass2.json'))
 p2, p1 = d['held']['report-half']['official'], d['pass1_held']['report-half']['official']
 print('yes' if p2 > p1 + 0.0005 else 'no')")
 if [ "$USE" != yes ]; then
