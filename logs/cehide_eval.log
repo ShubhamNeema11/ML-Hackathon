@@ -1,0 +1,4 @@
+reranker alone (with address, 39,892 pairs): AUC full text 0.9910  state hidden 0.9907   mean |change| 0.0090
+reranker alone (all scored, 53,443 pairs): AUC full text 0.9845  state hidden 0.9841   mean |change| 0.0083
+ranker_cd with reranker on full text   : half A 0.9875  half B 0.9872  TP 37124  FP wrong 42
+ranker_cd with reranker on state hidden: half A 0.9874  half B 0.9867  TP 37098  FP wrong 44

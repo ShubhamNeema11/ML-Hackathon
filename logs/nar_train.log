@@ -1,0 +1,94 @@
+training pairs: 447,748  (extra pair files: -; init from: base model)
+listwise groups: 63,964 (one true owner + up to 6 hard negatives each); 7996 steps per epoch, 7996 steps
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+Loading weights:   0%|          | 0/199 [00:00<?, ?it/s]Loading weights:   1%|          | 1/199 [00:00<03:16,  1.01it/s]Loading weights:  10%|█         | 20/199 [00:01<00:07, 24.58it/s]Loading weights:  20%|█▉        | 39/199 [00:01<00:03, 48.72it/s]Loading weights: 100%|██████████| 199/199 [00:01<00:00, 164.33it/s]
+[transformers] [1mBertForSequenceClassification LOAD REPORT[0m from: intfloat/multilingual-e5-small
+Key               | Status  | 
+------------------+---------+-
+classifier.weight | MISSING | 
+classifier.bias   | MISSING | 
+
+Notes:
+- MISSING:	those params were newly initialized because missing from the checkpoint. Consider training on your downstream task.
+  step 0/7996  listwise loss 1.9491  (8s)
+  step 100/7996  listwise loss 1.9447  (20s)
+  step 200/7996  listwise loss 1.6440  (32s)
+  step 300/7996  listwise loss 1.2841  (43s)
+  step 400/7996  listwise loss 1.0636  (55s)
+  step 500/7996  listwise loss 0.9220  (67s)
+  step 600/7996  listwise loss 0.8822  (79s)
+  step 700/7996  listwise loss 0.8267  (91s)
+  step 800/7996  listwise loss 0.7515  (103s)
+  step 900/7996  listwise loss 0.7421  (115s)
+  step 1000/7996  listwise loss 0.6801  (128s)
+  step 1100/7996  listwise loss 0.7164  (141s)
+  step 1200/7996  listwise loss 0.6863  (154s)
+  step 1300/7996  listwise loss 0.7394  (167s)
+  step 1400/7996  listwise loss 0.7226  (180s)
+  step 1500/7996  listwise loss 0.7464  (196s)
+  step 1600/7996  listwise loss 0.7380  (214s)
+  step 1700/7996  listwise loss 0.7316  (232s)
+  step 1800/7996  listwise loss 0.7340  (250s)
+  step 1900/7996  listwise loss 0.7670  (268s)
+  step 2000/7996  listwise loss 0.6841  (286s)
+  step 2100/7996  listwise loss 0.7225  (304s)
+  step 2200/7996  listwise loss 0.6950  (324s)
+  step 2300/7996  listwise loss 0.6732  (338s)
+  step 2400/7996  listwise loss 0.6592  (351s)
+  step 2500/7996  listwise loss 0.7162  (363s)
+  step 2600/7996  listwise loss 0.6552  (375s)
+  step 2700/7996  listwise loss 0.6457  (387s)
+  step 2800/7996  listwise loss 0.6639  (399s)
+  step 2900/7996  listwise loss 0.6223  (411s)
+  step 3000/7996  listwise loss 0.6286  (423s)
+  step 3100/7996  listwise loss 0.6741  (436s)
+  step 3200/7996  listwise loss 0.6281  (449s)
+  step 3300/7996  listwise loss 0.6678  (462s)
+  step 3400/7996  listwise loss 0.6158  (475s)
+  step 3500/7996  listwise loss 0.6179  (487s)
+  step 3600/7996  listwise loss 0.6313  (501s)
+  step 3700/7996  listwise loss 0.6179  (515s)
+  step 3800/7996  listwise loss 0.6430  (528s)
+  step 3900/7996  listwise loss 0.6754  (540s)
+  step 4000/7996  listwise loss 0.6689  (553s)
+  step 4100/7996  listwise loss 0.5975  (565s)
+  step 4200/7996  listwise loss 0.6384  (578s)
+  step 4300/7996  listwise loss 0.6325  (591s)
+  step 4400/7996  listwise loss 0.6244  (604s)
+  step 4500/7996  listwise loss 0.6010  (616s)
+  step 4600/7996  listwise loss 0.6356  (629s)
+  step 4700/7996  listwise loss 0.5982  (641s)
+  step 4800/7996  listwise loss 0.6253  (653s)
+  step 4900/7996  listwise loss 0.6180  (665s)
+  step 5000/7996  listwise loss 0.6823  (677s)
+  step 5100/7996  listwise loss 0.6487  (690s)
+  step 5200/7996  listwise loss 0.6491  (702s)
+  step 5300/7996  listwise loss 0.6243  (714s)
+  step 5400/7996  listwise loss 0.5718  (727s)
+  step 5500/7996  listwise loss 0.5649  (744s)
+  step 5600/7996  listwise loss 0.6286  (767s)
+  step 5700/7996  listwise loss 0.5954  (793s)
+  step 5800/7996  listwise loss 0.6542  (819s)
+  step 5900/7996  listwise loss 0.6390  (844s)
+  step 6000/7996  listwise loss 0.6412  (872s)
+  step 6100/7996  listwise loss 0.6159  (897s)
+  step 6200/7996  listwise loss 0.6240  (920s)
+  step 6300/7996  listwise loss 0.6606  (937s)
+  step 6400/7996  listwise loss 0.6263  (951s)
+  step 6500/7996  listwise loss 0.5739  (965s)
+  step 6600/7996  listwise loss 0.5857  (978s)
+  step 6700/7996  listwise loss 0.5747  (991s)
+  step 6800/7996  listwise loss 0.6066  (1006s)
+  step 6900/7996  listwise loss 0.5943  (1025s)
+  step 7000/7996  listwise loss 0.5927  (1043s)
+  step 7100/7996  listwise loss 0.6253  (1061s)
+  step 7200/7996  listwise loss 0.6091  (1078s)
+  step 7300/7996  listwise loss 0.5434  (1093s)
+  step 7400/7996  listwise loss 0.6309  (1107s)
+  step 7500/7996  listwise loss 0.5763  (1124s)
+  step 7600/7996  listwise loss 0.5908  (1137s)
+  step 7700/7996  listwise loss 0.6106  (1150s)
+  step 7800/7996  listwise loss 0.6085  (1163s)
+  step 7900/7996  listwise loss 0.6137  (1176s)
+Writing model shards:   0%|          | 0/1 [00:00<?, ?it/s]Writing model shards: 100%|██████████| 1/1 [00:07<00:00,  7.10s/it]Writing model shards: 100%|██████████| 1/1 [00:07<00:00,  7.11s/it]
+saved C:\Users\Lenovo\Downloads\Projects\ML Hackathon\models\ce_nar

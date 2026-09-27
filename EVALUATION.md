@@ -93,3 +93,19 @@ output_final/ = B2 + specialist + all French fixes (france3) + pass 2. Expected 
   (+16 true links, −1 wrong link). cdrq ≥ cdr in 9/9 rule cells on half A and 7/9 on half B; averaging cdr+cdrq is not better than cdrq.
 - The joint tuner picked no-address 0.7/0.2 for cdrq (report half 0.9884): lowering the threshold adds more wrong links than it gains → keep 0.8.
 - Test side: `run_final_rq.sh` → `output_cd_p2xrq/` (pass 2 + decision_pass2_exact.json).
+
+## LB: output_cd_p2xrq scored BELOW output_final (0.9809)
+- output_cd_p2xrq accepts +45k pairs vs output_final; nearly all come from the exact-metric rule (addr 0.65, no-address 0.5), which was
+  tuned on the training mirror (26% records without a match) - test has ~40%, so those extra links are wrong far more often on test.
+  The generic model with the old rule (output_cd_p2) differs from output_final by only ~17-18k pairs each way.
+- New file with the old (orphan-reweighted) rule decision_pass2.json: `output_cd_p2rq/` (generic + raw names + raw-name reranker),
+  5,836,988 pairs (output_final 5,831,107; 18k removed, 24k added). Validator PASS. Log: logs/rq_write_oldrule.log.
+
+## Does the address reranker depend on the state code? (logs/cehide_eval.log, crossenc ER_CE_HIDE_STATE)
+Held-out eval pairs re-scored by ce_er2 with the trailing state code removed from both texts (no training):
+| | reranker AUC (address pairs) | ranker_cd half A | half B |
+|---|---|---|---|
+| full text | 0.9910 | 0.9875 | 0.9872 |
+| state hidden | 0.9907 | 0.9874 | 0.9867 |
+Scores move by 0.009 on average: the reranker barely uses the state token, so retraining it with the state hidden (8-10 h) is not
+expected to change the unseen-country result. Not pursued.

@@ -1,0 +1,7 @@
+test: 2,124,048 pairs in the uncertain band / without address to score (0s)
+Loading weights:   0%|          | 0/201 [00:00<?, ?it/s]Loading weights:  78%|███████▊  | 156/201 [00:00<00:00, 1550.83it/s]Loading weights: 100%|██████████| 201/201 [00:00<00:00, 1903.60it/s]
+  scored 500,000/2,124,048 (91s)
+  scored 1,000,000/2,124,048 (165s)
+  scored 1,500,000/2,124,048 (238s)
+  scored 2,000,000/2,124,048 (304s)
+  scored 2,124,048/2,124,048 (321s)

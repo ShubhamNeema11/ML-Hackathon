@@ -1,0 +1,4 @@
+decision rule {'thr_addr': 0.65, 'thr_noaddr': 0.5, 'margin': 0.3, 'margin_noaddr': 0.3, 'exact_half_a': 0.9889534091376665, 'exact_half_b': 0.9890740735217743}
+rule {'thr_addr': 0.65, 'thr_noaddr': 0.5, 'margin': 0.3, 'margin_noaddr': 0.3, 'exact_half_a': 0.9889534091376665, 'exact_half_b': 0.9890740735217743}: 5,875,301 records assigned an S1 owner (10s)
+matching_results.tsv: 1,732,544 S1 rows, 99,800 empty (14s)
+candidate_pairs.tsv written (66s)

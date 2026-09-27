@@ -45,6 +45,7 @@ BAND = tuple(float(x) for x in os.environ.get("ER_CE_BAND", "0.05,0.99").split("
 TOPK = int(os.environ.get("ER_CE_TOPK", 2))
 MAX_LEN = int(os.environ.get("ER_CE_MAXLEN", 128))
 TEXT = os.environ.get("ER_CE_TEXT", "joint")
+HIDE_STATE = float(os.environ.get("ER_CE_HIDE_STATE", 0))   # share of entities whose trailing state code is removed from the text (1 = all, for the dependence test; 0.5 = training dropout)
 LOSS = os.environ.get("ER_CE_LOSS", "bce")
 NEG_PER_REC = int(os.environ.get("ER_CE_NEG", 2))
 NEG_MINP = float(os.environ.get("ER_CE_NEG_MINP", 0.05))   # a wrong candidate counts as a hard negative above this stage-1 probability (0 = the top-NEG wrong ones of every record)
@@ -70,6 +71,10 @@ def entity_text(prefix: str, ids: pl.DataFrame) -> pl.DataFrame:
         from ranker import _fr_addr
         d = d.with_columns(pl.when(pl.col("country") == "France").then(_fr_addr(pl.col("addr_norm"))).otherwise(pl.col("addr_norm")).alias("addr_norm"))
     d = d.drop("country")
+    if HIDE_STATE > 0:   # hide the trailing state code (', tn' / ', az'): a country-specific token the model must not depend on
+        d = d.join(pl.concat([pl.read_parquet(NORM / f"{prefix}source{i}.parquet", columns=["entity_id", "state"]).join(ids, on="entity_id", how="semi") for i in (1, 2, 3)]), on="entity_id", how="left")
+        hide = (pl.col("entity_id").hash(seed=20260927) % 1000 < int(HIDE_STATE * 1000)) & (pl.col("state").fill_null("") != "") & pl.col("addr_norm").str.ends_with(", " + pl.col("state").fill_null(""))
+        d = d.with_columns(pl.when(hide).then(pl.col("addr_norm").str.head(pl.col("addr_norm").str.len_chars() - pl.col("state").str.len_chars() - 2)).otherwise(pl.col("addr_norm")).alias("addr_norm")).drop("state")
     if TEXT == "name":
         return d.select("entity_id", pl.col("name_norm").fill_null("").alias("text"))
     if TEXT == "raw_name":   # the untouched business_name (case, punctuation, legal-form spelling kept): for records without an address
