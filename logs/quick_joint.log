@@ -1,0 +1,4 @@
+orphan weights: addr 0.101  no-addr 0.101
+RESULT B2 for everyone              {'thr_addr': 0.8, 'thr_noaddr': 0.85, 'margin': 0.2, 'margin_noaddr': 0.4}  thr-half 0.9878   report-half 0.9869   (TP 18683, FP wrong 16, FP orphan-w 29)
+RESULT B2 + no-address specialist   {'thr_addr': 0.8, 'thr_noaddr': 0.85, 'margin': 0.2, 'margin_noaddr': 0.0}  thr-half 0.9888   report-half 0.9881   (TP 18748, FP wrong 13, FP orphan-w 30)
+wrote decision_na.json

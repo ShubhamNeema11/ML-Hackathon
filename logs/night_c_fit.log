@@ -1,0 +1,14 @@
+=== C features 02:15:51
+saved feat_train (206s)
+saved feat_eval (36s)
+=== C fit 02:20:00
+train pairs 17,304,014 (pos 682,904)   eval pairs 3,184,784 (pos 38,194)   features 62
+hard mining: 28,359 hard positives (4.2% of positives), 29,344 hard negatives, easy negatives kept 15%; training rows 3,201,094 of 17,304,014
+Early stopping, best iteration is:
+  decision tuned on thr-half: {'thr_addr': 0.85, 'thr_noaddr': 0.85, 'margin': 0.3, 'precision': 0.9975990661281438, 'recall': 0.965146186551887, 'f05': 0.9909350608930522}
+  thr-half         TP 18,387  FN 664  FP wrong-owner 18  FP orphan (reweighted) 26   precision 0.9976  recall 0.9651  F0.5 0.9909   expected official score 0.9875
+  early-stop half  TP 18,655  FN 733  FP wrong-owner 14  FP orphan (reweighted) 24   precision 0.9980  recall 0.9622  F0.5 0.9906   expected official score 0.9869
+top features: dense_margin, dense_gap_best, num_absdiff, dense_score, ce_score, dense_rank, ce_gap_best, name_native_ratio, num_only_q, ce2_gap_best, num_jaccard, addr_tset, legal_code_q, sparse_gap_best
+=== B2 for comparison (models/decision_b2.json):
+{'thr-half': 0.9878, 'early-stop half': 0.9869}
+C FIT DONE 02:23:49

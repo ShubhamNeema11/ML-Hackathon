@@ -1,0 +1,15 @@
+pass-2 features 8,629,660 rows (51s)
+fit rows 1,718,378 (positives 1,615,391), early-stop rows 171,299
+Training until validation scores don't improve for 50 rounds
+[100]	valid_0's binary_logloss: 0.0233371
+[200]	valid_0's binary_logloss: 0.0226709
+[300]	valid_0's binary_logloss: 0.0226166
+Early stopping, best iteration is:
+[278]	valid_0's binary_logloss: 0.0226093
+held-out population: 766,438 owned records
+  decision pass1: {'thr_addr': 0.8, 'thr_noaddr': 0.85, 'margin': 0.3, 'precision': 0.9974693949919811, 'recall': 0.968781472919591, 'f05': 0.9915966880279111}
+RESULT pass1      thr-half 0.9886   report-half 0.9887
+  decision pass2: {'thr_addr': 0.8, 'thr_noaddr': 0.7, 'margin': 0.1, 'precision': 0.9979190161645454, 'recall': 0.969679021880365, 'f05': 0.9921401898399632}
+RESULT pass2      thr-half 0.9892   report-half 0.9893
+top features: margin, p, logit, pmax_oth, p2, p1, sum_p_oth, sum_p_oth_gap, sib_sim_max, sib_sim_mean    (108s)
+pass 2 minus pass 1 on the report half: +0.0006  ->  USE pass 2

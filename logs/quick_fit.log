@@ -1,0 +1,25 @@
+training set: feat_noaddr2_trainall.parquet
+train pairs 10,500,434 (pos 289,759) records 309,844; eval pairs 71,027 records 2,004
+eval no-address: 1629 owned, 375 orphans
+Training until validation scores don't improve for 100 rounds
+[200]	valid_0's binary_logloss: 0.041061
+[400]	valid_0's binary_logloss: 0.0399192
+[600]	valid_0's binary_logloss: 0.0394893
+[800]	valid_0's binary_logloss: 0.0392542
+[1000]	valid_0's binary_logloss: 0.0390807
+[1200]	valid_0's binary_logloss: 0.0389635
+[1400]	valid_0's binary_logloss: 0.0388761
+[1600]	valid_0's binary_logloss: 0.0387944
+[1800]	valid_0's binary_logloss: 0.0387361
+[2000]	valid_0's binary_logloss: 0.0386878
+[2200]	valid_0's binary_logloss: 0.0386381
+[2400]	valid_0's binary_logloss: 0.0386025
+[2600]	valid_0's binary_logloss: 0.0385707
+[2800]	valid_0's binary_logloss: 0.0385392
+[3000]	valid_0's binary_logloss: 0.0385072
+Did not meet early stopping. Best iteration is:
+[3000]	valid_0's binary_logloss: 0.0385072
+orphan weight 0.1:
+  B2 (current, 5 extras)       F0.5 0.7870  thr 0.6 margin 0.3  TP 881  FP 111.1  precision 0.8880  recall 0.5408
+  specialist (new cands, no CE) F0.5 0.8329  thr 0.6 margin 0.2  TP 876  FP 31.4  precision 0.9654  recall 0.5378
+top features: tf_rank, dense_margin, dense_rank, tf_ties, dense_gap_best, tf_gap_best, name_jw_gap, s_name_twins, both, tf_n_close, tf_ratio, legal_code_q

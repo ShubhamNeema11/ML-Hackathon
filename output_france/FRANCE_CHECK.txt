@@ -1,0 +1,3 @@
+before (pred_na) [{'country': 'France', 'unsure_0.05-0.98': 0.1404, 'accepted_zone>=0.8': 0.6019}, {'country': 'India', 'unsure_0.05-0.98': 0.0499, 'accepted_zone>=0.8': 0.58}, {'country': 'US', 'unsure_0.05-0.98': 0.0559, 'accepted_zone>=0.8': 0.5866}]
+after  (pred_na_fr) [{'country': 'France', 'unsure_0.05-0.98': 0.1308, 'accepted_zone>=0.8': 0.599}, {'country': 'India', 'unsure_0.05-0.98': 0.0499, 'accepted_zone>=0.8': 0.58}, {'country': 'US', 'unsure_0.05-0.98': 0.0559, 'accepted_zone>=0.8': 0.5866}]
+assigned pairs: output_best 5834137  output_france 5830043  only in best 6711  only in france 2617

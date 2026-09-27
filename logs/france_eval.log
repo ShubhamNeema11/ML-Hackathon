@@ -1,0 +1,11 @@
+RESULT clean held-out (US / India, as B2 sees them)               tuned 0.9878   REPORT 0.9869  (report: TP 18687, FP wrong 18, FP orphan-w 29)
+RESULT French-style ADDRESS damage (what France2 fixes)           tuned 0.9874   REPORT 0.9864  (report: TP 18652, FP wrong 18, FP orphan-w 29)
+RESULT French-style LEGAL-IN-NAME damage (what France3 adds)      tuned 0.9873   REPORT 0.9864  (report: TP 18669, FP wrong 18, FP orphan-w 35)
+generic list widened: 300 -> 730 words (S1 token coverage 0.48 -> 0.63)
+RESULT generic list WIDENED like the French one (France3 risk)    tuned 0.9878   REPORT 0.9868  (report: TP 18681, FP wrong 19, FP orphan-w 30)
+SUMMARY (report half): clean 0.9869, addr 0.9864, name 0.9864, generic 0.9868
+  addr: mechanism cost on labelled data +0.0005  ->  expected effect of its fix on the leaderboard (France ~15% of S1) about +0.0001
+  name: mechanism cost on labelled data +0.0005  ->  expected effect of its fix on the leaderboard (France ~15% of S1) about +0.0001
+  generic: widening changes the labelled score by -0.0001 (negative = the French generic list is a risk)
+
+[exited with code 0]
