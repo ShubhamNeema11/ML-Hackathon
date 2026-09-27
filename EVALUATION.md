@@ -158,3 +158,12 @@ Next: run_cd_rules.sh = generic models + rules back on at test time (no training
   their scores are less reliable, which the training mirror (training countries only) cannot show.
 - predict.py ER_DECISION_UNSEEN=<rule>: a separate rule for records whose country is not in the training data (found from the data).
   run_split.sh: exact rule for training countries + the 0.9815 file's rule for the rest -> output_cd_p2rq_split, output_cdr_rules_split.
+
+## Files from run_cd_rules.sh / run_split.sh (all validator PASS), vs the 0.9815 file output_cd_p2rq
+| file | rules | decision | pairs | removed / added vs 0.9815 |
+|---|---|---|---|---|
+| output_cd_p2rq_split | off | exact rule for training countries, 0.9815 rule for the rest | 5,861,017 | 112 / 24,141 |
+| output_cdr_rules | on | 0.9815 rule | 5,833,139 | 9,013 / 5,164 |
+| output_cdr_rules_split | on | split | 5,857,169 | 9,122 / 29,303 |
+| output_cdr_rules_x | on | exact rule everywhere (not recommended: same rule cost ~0.001 before) | 5,872,522 | - |
+Submission order: output_cd_p2rq_split (one change vs 0.9815); if it gains, output_cdr_rules_split.
