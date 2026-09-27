@@ -33,7 +33,7 @@ step() { local name=$1 done=$2; shift 2
 # the held-out dense file of Stage 1 was written without a tag: keep it under the new tag
 [ -f "$N/eval_dense_m3.parquet" ] || cp -p "$N/eval_dense.parquet" "$N/eval_dense_m3.parquet"
 step dense_train    "$N/cand/train_dense_m3/_DONE"    python -u embed.py search train
-step dense_trainall "$N/cand/trainall_dense_m3/_DONE" python -u noaddr.py regular_dense
+step dense_trainall "$N/cand/trainall_dense_m3/_DONE" python -u embed.py search trainall
 step dense_test     "$N/cand/test_dense_m3/_DONE"     python -u embed.py search test
 RR=(env ER_CE_BASE=BAAI/bge-reranker-v2-m3 ER_CE_MODEL_DIR=rr_er ER_CE_TEXT=joint ER_CE_MAXLEN=128 ER_CE_DTYPE=$([ "$BF16" = 1 ] && echo bf16 || echo fp16)
     ER_CE_SCORE_BATCH=$([ "${GPU_MB:-0}" -ge 20000 ] && echo 512 || echo 256) ER_CE_TAG=_rr)

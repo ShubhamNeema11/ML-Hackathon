@@ -151,13 +151,16 @@ if __name__ == "__main__":
             print(f"union top{k:>2} each: recall {hit:.4f}   cands/query {u.height / q.height:.1f}", flush=True)
     elif cmd == "search":
         # train: the ranker-training queries chosen by `block.py train`; test: every test query
+        # trainall: every no-address training record of noaddr.trainall_queries (the specialist's training set); run here, not in noaddr.py,
+        # because a process holding the polars-heavy feature code AND torch can segfault
         split = sys.argv[2]
-        s1 = texts(split, 1)
-        keep = pl.read_parquet(NORM / "train_queries.parquet") if split == "train" else None
+        src = "test" if split == "test" else "train"
+        s1 = texts(src, 1)
+        keep = pl.read_parquet(NORM / {"train": "train_queries.parquet", "trainall": "trainall_queries.parquet"}[split]) if split != "test" else None
 
         def queries(country):
             for n in (2, 3):  # one source at a time
-                d = texts(split, n).filter(pl.col("country") == country)
+                d = texts(src, n).filter(pl.col("country") == country)
                 if keep is not None:
                     d = d.join(keep, on="entity_id", how="semi")
                 lim = int(os.environ.get("ER_SEARCH_LIMIT", 0))   # smoke tests only: the first N queries of each source and country
