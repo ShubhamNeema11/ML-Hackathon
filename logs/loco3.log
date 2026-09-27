@@ -1,0 +1,3 @@
+RESULT code dropout 30%, trained on US only: India (unseen) 0.9614   US 0.9855
+RESULT code dropout 50%, trained on US only: India (unseen) 0.9624   US 0.9854
+reference (loco.py): codes 0.9586 / 0.9850, no codes 0.9620 / 0.9851, India seen 0.9874
