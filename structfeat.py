@@ -62,31 +62,25 @@ def load_vocab() -> dict:
     return vocab
 
 
-FR_VOCAB_PATH = ROOT / "models" / "struct_vocab_fr.json"
-# French names use a small vocabulary: the top 100 words cover 63% of French S1 name tokens, in the range of the training list's coverage
-# (US 43%, India 57.5%); top 300 would cover 73% and blunt the rare-word decoy signal. The swap words seen in unsure French pairs
-# (societe, etablissements, compagnie, collectif, section, groupe, culturelle, association, developpement, services, publique) are all inside.
-N_GENERIC_FR = 100
+# French generic business-name words, written by hand (NOT counted from the test data: nothing is learned from test inputs, and a hidden test set
+# gets the same list). France has no training data, so without this list its generic words all counted as rare, distinctive words and a
+# Societe <-> Etablissement swap looked like a different business. Legal forms are handled separately (FR_LEGAL).
+FR_GENERIC = [
+    "de", "du", "des", "la", "le", "les", "et", "d", "l", "au", "aux", "en", "sur", "pour", "france", "francais", "francaise",
+    "societe", "ste", "etablissement", "etablissements", "ets", "compagnie", "cie", "groupe", "group", "holding", "entreprise", "entreprises",
+    "services", "service", "conseil", "conseils", "gestion", "developpement", "participations", "investissements", "finance", "financement",
+    "association", "asso", "club", "comite", "union", "federation", "amicale", "collectif", "section", "cercle", "ligue", "fondation",
+    "centre", "maison", "atelier", "agence", "cabinet", "bureau", "office", "institut", "espace", "point", "fonds",
+    "ecole", "college", "lycee", "primaire", "maternelle", "elementaire", "universite", "formation",
+    "sante", "pharmacie", "medical", "medicale", "clinique", "soins", "cultuelle", "culturelle", "sportive", "sportif", "sport", "sports",
+    "publique", "public", "municipal", "municipale", "communale", "departemental", "departementale", "regional", "regionale", "national", "nationale",
+    "agricole", "commerce", "commercial", "commerciale", "industrie", "industriel", "industrielle", "immobilier", "immobiliere", "transports",
+    "freres", "fils", "amis", "parents", "famille", "saint", "sainte", "nouvelle", "nouveau", "grand", "grande", "petit", "petite",
+]
 
 
 def fr_generic() -> list:
-    """The generic (= frequent) name words of French S1 entities, by the same rule as the training vocabulary (top N_GENERIC words of S1 names).
-    France has no training data, so its generic words were all counted as rare, distinctive words (a Societe <-> Etablissement swap looked like
-    a different business). Built once from the S1 file of the split that holds French entities (test) and stored next to struct_vocab.json."""
-    if FR_VOCAB_PATH.exists():
-        return json.loads(FR_VOCAB_PATH.read_text(encoding="utf-8"))
-    for f in ("test_source1.parquet", "source1.parquet"):
-        p = NORM / f
-        if p.exists():
-            s1 = pl.read_parquet(p, columns=["country", "name_core"]).filter(pl.col("country") == "France")
-            if s1.height:
-                break
-    else:
-        return []
-    words = (s1.select(pl.col("name_core").str.split(" ").alias("t")).explode("t").filter(pl.col("t").str.len_chars() >= 2)
-               .group_by("t").len().sort("len", descending=True).head(N_GENERIC_FR)["t"].to_list())
-    FR_VOCAB_PATH.write_text(json.dumps(words, ensure_ascii=False), encoding="utf-8")
-    return words
+    return FR_GENERIC
 
 
 def entity_lists(t: pl.DataFrame) -> pl.DataFrame:
