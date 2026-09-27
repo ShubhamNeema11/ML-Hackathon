@@ -1,0 +1,18 @@
+no-address held-out records with a same-name twin among their candidates: 13,925
+  raw ratio (case kept)                        owner closer 26.8%   tie 61.3%   twin closer 11.9%
+  raw ratio (lower case)                       owner closer 27.1%   tie 61.3%   twin closer 11.6%
+  raw Jaro-Winkler (lower)                     owner closer 27.9%   tie 61.3%   twin closer 10.8%
+  raw token-sort (lower)                       owner closer 27.2%   tie 61.4%   twin closer 11.5%
+  raw Indel on the last 12 chars (legal form)  owner closer 23.4%   tie 65.5%   twin closer 11.1%
+  current specialist score: owner higher 35.6%
+  owner and twin have the IDENTICAL raw name (lower case): 60.2%
+    record RO Energy LLP                      | owner RO Energy                          | twin RO Energy LLP
+    record O/O Hawk Corp                      | owner O/O Hawk                           | twin O/O Hawk Corp
+    record Motaor Inc                         | owner Motaor                             | twin Motaor Inc
+    record VINAYAKA SANGH [CORP]              | owner Vinayaka Sangh                     | twin Vinayaka Sangh Corp
+    record Smt FOXGLOVE-CORPORATION           | owner Foxglove Holdings                  | twin Foxglove Holdings Corporation
+    record Smt Anmol Polytechnic LLP          | owner Anmol Polytechnic                  | twin Anmol Polytechnic LLP
+    record Mr Tdi Nursing Home Corporation    | owner Tdi Nursing Home                   | twin Tdi Nursing Home Corp
+    record Shena N. Rolen, DPM LP             | owner Shena N. Rolen, DPM                | twin Shena N. Rolen, DPM LP
+    record Marchelle Barnett Stores LP        | owner Marchelle Barnett Stores           | twin Marchelle Barnett Stores LP
+    record Ortega, Boyd and Kotowski LLC      | owner Ortega, Boyd and Kotowski PC       | twin Ortega, Boyd and Kotowski LLC

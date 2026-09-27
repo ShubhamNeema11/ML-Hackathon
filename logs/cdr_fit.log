@@ -1,0 +1,4 @@
+TUNE lr 0.03 leaves 31 min_leaf 100: best iteration 3000, logloss train 0.03496 / early-stop split 0.03658 (gap 0.00162)
+  B2 (current, 5 extras)       F0.5 0.7908  thr 0.7 margin 0.3  TP 819  FP 68.4  precision 0.9229  recall 0.5028
+  specialist (new cands, no CE) F0.5 0.8402  thr 0.7 margin 0.2  TP 882  FP 23.0  precision 0.9746  recall 0.5414
+top features: tf_rank, dense_rank, raw_jw_gap, dense_margin, dense_gap_best, s_name_twins, tf_ties, raw_ratio_gap, raw_n_best, tf_gap_best, tf_n_close, legal_form_eq

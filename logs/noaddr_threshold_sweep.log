@@ -1,0 +1,15 @@
+pass 2 + exact-tuned rule; only the NO-ADDRESS threshold / margin change (exact per-S1 metric, held-out S1, both halves together)
+  no-address threshold 0.2, margin 0.0: exact metric 0.98656   no-address records accepted 25,671, of them correct 21,878
+  no-address threshold 0.3, margin 0.0: exact metric 0.98784   no-address records accepted 23,309, of them correct 20,960
+  no-address threshold 0.4, margin 0.0: exact metric 0.98854   no-address records accepted 21,454, of them correct 20,070
+  no-address threshold 0.5, margin 0.0: exact metric 0.98889   no-address records accepted 20,208, of them correct 19,390
+  no-address threshold 0.6, margin 0.0: exact metric 0.98898   no-address records accepted 19,223, of them correct 18,740
+  no-address threshold 0.7, margin 0.0: exact metric 0.98897   no-address records accepted 18,385, of them correct 18,138
+  no-address threshold 0.8, margin 0.0: exact metric 0.98880   no-address records accepted 17,722, of them correct 17,570
+  no-address threshold 0.2, margin 0.3: exact metric 0.98900   no-address records accepted 20,075, of them correct 19,352
+  no-address threshold 0.3, margin 0.3: exact metric 0.98900   no-address records accepted 20,075, of them correct 19,352
+  no-address threshold 0.4, margin 0.3: exact metric 0.98900   no-address records accepted 19,976, of them correct 19,289
+  no-address threshold 0.5, margin 0.3: exact metric 0.98901   no-address records accepted 19,654, of them correct 19,077
+  no-address threshold 0.6, margin 0.3: exact metric 0.98904   no-address records accepted 19,063, of them correct 18,662
+  no-address threshold 0.7, margin 0.3: exact metric 0.98898   no-address records accepted 18,363, of them correct 18,126
+  no-address threshold 0.8, margin 0.3: exact metric 0.98880   no-address records accepted 17,720, of them correct 17,569

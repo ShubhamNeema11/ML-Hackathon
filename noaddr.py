@@ -30,7 +30,13 @@ TAGV = ("2" if TFIDF else "") + __import__("block").DENSE_TAG                   
 MODEL = ranker.ROOT / "models" / os.environ.get("ER_NOADDR_MODEL", "noaddr_c.txt" if TFIDF else "noaddr_a.txt")
 NEW = ["name_ratio_gap", "name_tset_gap", "name_jw_gap", "name_ratio_rank", "n_name97", "n_name90", "s_name_twins", "cand_dup_frac"]
 TF = ["tf_score", "tf_rank", "tf_gap_best", "tf_ratio", "tf_ties", "tf_n_close"]
-COLS = FEATURES + NEW + (TF if TFIDF else [])
+# ER_NA_RAW=1: raw-name features (the untouched business_name, before normalization): identical-name twins of a no-address record can
+# still differ in legal-form spelling / punctuation / word forms, and when they differ the raw name points to the owner ~70% of the time
+RAW = ["raw_ratio", "raw_jw", "raw_tsort", "raw_exact", "raw_len_diff", "raw_ratio_gap", "raw_jw_gap", "raw_ratio_rank", "raw_n_best"]
+NA_RAW = os.environ.get("ER_NA_RAW", "0") == "1"
+COLS = FEATURES + NEW + (TF if TFIDF else []) + (RAW if NA_RAW else [])
+if NA_RAW:
+    TAGV = TAGV + "r"   # feat_noaddr2r_<split>.parquet: the feature files plus the raw-name columns (made by `noaddr.py raw <split>`)
 A_PARAMS = dict(objective="binary", learning_rate=0.03, num_leaves=31, min_data_in_leaf=100, feature_fraction=0.8, bagging_fraction=0.8, bagging_freq=1,
                 lambda_l2=5.0, verbose=-1, num_threads=os.cpu_count() or 8)
 
@@ -65,6 +71,29 @@ def regular_dense():
     qt = pl.concat([embed.texts("train", i).join(keep, on="entity_id", how="semi") for i in (2, 3)])
     embed.search(embed.texts("train", 1), lambda c: [qt.filter(pl.col("country") == c)], embed.load_model(), out_dir=NORM / "cand" / f"trainall_dense{embed.DENSE_TAG}")
     print(f"trainall dense candidates for {qt.height:,} records", flush=True)
+
+
+def add_raw(split: str):
+    """feat_noaddr2_<split> + raw-name features -> feat_noaddr2r_<split> (see RAW)."""
+    from rapidfuzz import distance, fuzz, process
+    prefix = "test_" if split == "test" else ""
+    src_tag = TAGV[:-1] if TAGV.endswith("r") else TAGV
+    f = pl.read_parquet(NORM / f"feat_noaddr{src_tag}_{split}.parquet")
+    raw = pl.concat([pl.read_parquet(NORM / f"{prefix}source{i}.parquet", columns=["entity_id", "name_raw"]) for i in (1, 2, 3)])
+    raw = raw.with_columns(pl.col("name_raw").fill_null("").str.to_lowercase().str.strip_chars())
+    f = f.join(raw.rename({"entity_id": "rec", "name_raw": "_qr"}), on="rec", how="left").join(raw.rename({"entity_id": "s1", "name_raw": "_sr"}), on="s1", how="left")
+    q, s = f["_qr"].fill_null("").to_list(), f["_sr"].fill_null("").to_list()
+    f = f.with_columns(pl.Series("raw_ratio", process.cpdist(q, s, scorer=fuzz.ratio, workers=-1).astype("float32")),
+                       pl.Series("raw_jw", process.cpdist(q, s, scorer=distance.JaroWinkler.normalized_similarity, workers=-1).astype("float32")),
+                       pl.Series("raw_tsort", process.cpdist(q, s, scorer=fuzz.token_sort_ratio, workers=-1).astype("float32")),
+                       (pl.col("_qr") == pl.col("_sr")).cast(pl.Int8).alias("raw_exact"),
+                       (pl.col("_qr").str.len_chars().cast(pl.Int32) - pl.col("_sr").str.len_chars().cast(pl.Int32)).abs().alias("raw_len_diff"))
+    f = f.with_columns((pl.col("raw_ratio").max().over("rec") - pl.col("raw_ratio")).alias("raw_ratio_gap"),
+                       (pl.col("raw_jw").max().over("rec") - pl.col("raw_jw")).alias("raw_jw_gap"),
+                       pl.col("raw_ratio").rank("min", descending=True).over("rec").alias("raw_ratio_rank"),
+                       (pl.col("raw_ratio") >= pl.col("raw_ratio").max().over("rec")).sum().over("rec").alias("raw_n_best")).drop("_qr", "_sr")
+    f.write_parquet(NORM / f"feat_noaddr{src_tag}r_{split}.parquet")
+    print(f"{split}: raw-name features for {f.height:,} pairs -> feat_noaddr{src_tag}r_{split}.parquet", flush=True)
 
 
 def s1_name_counts(prefix: str) -> pl.DataFrame:
@@ -393,4 +422,4 @@ def fit():
 
 
 if __name__ == "__main__":
-    {"features": lambda: build(sys.argv[2]), "fit": fit, "stage_a": lambda: stage_a(sys.argv[2]), "fit_b": fit_b, "joint": joint, "apply": apply, "trainall_queries": trainall_queries, "regular_sparse": regular_sparse, "regular_dense": regular_dense}[sys.argv[1]]()
+    {"raw": lambda: add_raw(sys.argv[2]), "features": lambda: build(sys.argv[2]), "fit": fit, "stage_a": lambda: stage_a(sys.argv[2]), "fit_b": fit_b, "joint": joint, "apply": apply, "trainall_queries": trainall_queries, "regular_sparse": regular_sparse, "regular_dense": regular_dense}[sys.argv[1]]()

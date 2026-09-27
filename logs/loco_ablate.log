@@ -1,0 +1,7 @@
+RESULT drop none (no codes only)                                       India (unseen) 0.9619 (P 0.9831 R 0.9239)   US 0.9844
+RESULT drop dense (embedding)                                          India (unseen) 0.9144 (P 0.9718 R 0.8170)   US 0.9833
+RESULT drop sparse (key blocking)                                      India (unseen) 0.9636 (P 0.9824 R 0.9303)   US 0.9846
+RESULT drop cross-encoder                                              India (unseen) 0.9472 (P 0.9798 R 0.8882)   US 0.9790
+RESULT drop address structure (numbers / units / city / state / postal) India (unseen) 0.9195 (P 0.9760 R 0.8222)   US 0.9684
+RESULT drop name words / legal (rare / generic / legal forms)          India (unseen) 0.9591 (P 0.9759 R 0.9330)   US 0.9839
+RESULT drop lengths / flags                                            India (unseen) 0.9638 (P 0.9771 R 0.9449)   US 0.9843

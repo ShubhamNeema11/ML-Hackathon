@@ -1,0 +1,14 @@
+held-out records with the owner among >= 2 reranker-scored candidates; share where each scorer ranks the OWNER first:
+shape: (4, 6)
+┌────────────┬──────────┬─────────┬──────────────┬────────────┬───────────────────┐
+│ q_has_addr ┆ has_twin ┆ records ┆ NEW reranker ┆ current CE ┆ B2 (all features) │
+│ ---        ┆ ---      ┆ ---     ┆ ---          ┆ ---        ┆ ---               │
+│ i8         ┆ bool     ┆ u32     ┆ f64          ┆ f64        ┆ f64               │
+╞════════════╪══════════╪═════════╪══════════════╪════════════╪═══════════════════╡
+│ 0          ┆ false    ┆ 869     ┆ 0.931        ┆ 0.919      ┆ 0.959             │
+│ 0          ┆ true     ┆ 351     ┆ 0.544        ┆ 0.504      ┆ 0.504             │
+│ 1          ┆ false    ┆ 3995    ┆ 0.993        ┆ 0.988      ┆ 0.99              │
+│ 1          ┆ true     ┆ 615     ┆ 0.997        ┆ 0.997      ┆ 1.0               │
+└────────────┴──────────┴─────────┴──────────────┴────────────┴───────────────────┘
+
+no-address twins: new-reranker score of the owner minus the best wrong twin: median +0.0000, |gap| < 0.01 for 62% of records

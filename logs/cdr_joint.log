@@ -1,0 +1,2 @@
+RESULT B2 for everyone              {'thr_addr': 0.8, 'thr_noaddr': 0.8, 'margin': 0.3, 'margin_noaddr': 0.4}  thr-half 0.9875   report-half 0.9872   (TP 18702, FP wrong 19, FP orphan-w 30)
+RESULT B2 + no-address specialist   {'thr_addr': 0.8, 'thr_noaddr': 0.8, 'margin': 0.3, 'margin_noaddr': 0.2}  thr-half 0.9888   report-half 0.9885   (TP 18766, FP wrong 11, FP orphan-w 31)

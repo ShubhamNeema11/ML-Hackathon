@@ -72,6 +72,9 @@ def entity_text(prefix: str, ids: pl.DataFrame) -> pl.DataFrame:
     d = d.drop("country")
     if TEXT == "name":
         return d.select("entity_id", pl.col("name_norm").fill_null("").alias("text"))
+    if TEXT == "raw_name":   # the untouched business_name (case, punctuation, legal-form spelling kept): for records without an address
+        r = pl.concat([pl.read_parquet(NORM / f"{prefix}source{i}.parquet", columns=["entity_id", "name_raw"]).join(ids, on="entity_id", how="semi") for i in (1, 2, 3)])
+        return r.select("entity_id", pl.col("name_raw").fill_null("").alias("text"))
     if TEXT == "addr":
         return d.select("entity_id", pl.col("addr_norm").fill_null("").alias("text"))
     return d.select("entity_id", pl.concat_str([pl.col("name_norm"), pl.lit(" | "), pl.col("addr_norm")]).alias("text"))
