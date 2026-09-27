@@ -20,7 +20,7 @@ import lightgbm as lgb
 import numpy as np
 import polars as pl
 
-from block import CHUNK, NORM, ROOT
+from block import CHUNK, DENSE_TAG, NORM, ROOT
 from ranker import CE2_TAG, CE3_TAG, CE_TAG, DECISION_PATH, MODEL_PATH, add_extras, join_ce, load_extras, merge_channels, read_texts, retrieval_features, string_features
 
 OUT = Path(os.environ.get("ER_OUT", ROOT / "output"))  # ER_OUT: write elsewhere (tests)
@@ -39,7 +39,7 @@ def ids_table() -> pl.DataFrame:
 def load_dense(ids: pl.DataFrame) -> pl.DataFrame:
     """All dense candidates as (rec_i, s1_i, score, rank) with UInt32 indices, sorted by rec_i.
     ~100M rows: 1.4 GB as integers, >6 GB as strings. Part files are converted a few at a time."""
-    files = sorted((NORM / "cand" / "test_dense").glob("*.parquet"))
+    files = sorted((NORM / "cand" / f"test_dense{DENSE_TAG}").glob("*.parquet"))
     id_rec = ids.rename({"entity_id": "rec", "idx": "rec_i"})
     id_s1 = ids.rename({"entity_id": "s1", "idx": "s1_i"})
     out = []

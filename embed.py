@@ -17,7 +17,7 @@ import numpy as np
 import polars as pl
 import torch
 
-from block import EVAL_K, NORM, ROOT, TOP_K, ground_truth, is_val_s1, recall_report
+from block import DENSE_TAG, EVAL_K, NORM, ROOT, TOP_K, ground_truth, is_val_s1, recall_report
 
 BASE_MODEL = os.environ.get("ER_EMBED_BASE", "intfloat/multilingual-e5-small")   # e.g. BAAI/bge-m3 (568M, MIT): needs a 24 GB card to fine-tune
 MODEL_DIR = ROOT / "models" / os.environ.get("ER_EMBED_DIR", "e5_er")
@@ -140,7 +140,7 @@ if __name__ == "__main__":
         truth = ground_truth().filter(is_val_s1()).join(qid.rename({"entity_id": "rec"}), on="rec", how="semi")
         dense = search(s1, lambda c: [q.filter(pl.col("country") == c)], load_model(), top_k=EVAL_K)
         print(f"dense search {time.time() - t0:.0f}s", flush=True)
-        dense.write_parquet(NORM / "eval_dense.parquet")
+        dense.write_parquet(NORM / f"eval_dense{DENSE_TAG}.parquet")
         sparse = pl.read_parquet(NORM / "eval_sparse.parquet")
         recall_report(sparse, truth, "sparse_rank", "sparse")
         recall_report(dense, truth, "dense_rank", "dense")
@@ -160,7 +160,10 @@ if __name__ == "__main__":
                 d = texts(split, n).filter(pl.col("country") == country)
                 if keep is not None:
                     d = d.join(keep, on="entity_id", how="semi")
+                lim = int(os.environ.get("ER_SEARCH_LIMIT", 0))   # smoke tests only: the first N queries of each source and country
+                if lim:
+                    d = d.head(lim)
                 for i in range(0, d.height, Q_CHUNK):
                     yield d.slice(i, Q_CHUNK)
 
-        search(s1, queries, load_model(), out_dir=NORM / "cand" / f"{split}_dense")
+        search(s1, queries, load_model(), out_dir=NORM / "cand" / f"{split}_dense{DENSE_TAG}")

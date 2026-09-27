@@ -27,6 +27,9 @@ NORM = ROOT / "normalized"
 DATASET = Path(os.environ.get("ER_DATASET", r"C:\Users\Lenovo\Downloads\6ab10eb3b23ba_student_resource\student_resource\dataset"))
 TOP_K = 10  # per channel: union of sparse+dense top-10 = 99.2% held-out recall at ~18 cands/record
 EVAL_K = 30
+# ER_DENSE_TAG (e.g. "_m3"): a second dense channel (another embedder) lives next to the current one: eval_dense<tag>.parquet,
+# cand/<split>_dense<tag>/, feat_noaddr2<tag>_*; empty = the current files, unchanged behaviour
+DENSE_TAG = os.environ.get("ER_DENSE_TAG", "")
 NGRAM_SPAN = 28  # 4-grams from the first 31 characters of the compact name
 MAX_DF = 400  # S1 keys shared by more entities than this are too generic to join on (they still count in norms)
 CHUNK = int(os.environ.get("ER_CHUNK", 50_000))  # queries per search chunk; also the part-file granularity

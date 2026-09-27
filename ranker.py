@@ -22,7 +22,7 @@ import polars as pl
 from rapidfuzz import distance, fuzz, process
 
 import structfeat
-from block import NORM, ROOT, TOP_K, ground_truth
+from block import DENSE_TAG, NORM, ROOT, TOP_K, ground_truth
 
 TEXT_COLS = ["entity_id", "name_core", "name_norm", "legal_form", "is_domain", "addr_latin", "city", "state", "postal", "has_addr"]
 FEAT_CHUNK = 1_000_000
@@ -95,10 +95,10 @@ def candidates(name: str) -> pl.DataFrame:
     """Union of both channels' top-K for a candidate set: 'train', 'test' (parts dirs) or 'eval' (held-out files)."""
     if name == "eval":
         sp = pl.read_parquet(NORM / "eval_sparse.parquet").filter(pl.col("sparse_rank") <= TOP_K)
-        de = pl.read_parquet(os.environ.get("ER_EVAL_DENSE", NORM / "eval_dense.parquet")).filter(pl.col("dense_rank") <= TOP_K)   # ER_EVAL_DENSE: experiments
+        de = pl.read_parquet(os.environ.get("ER_EVAL_DENSE", NORM / f"eval_dense{DENSE_TAG}.parquet")).filter(pl.col("dense_rank") <= TOP_K)   # ER_EVAL_DENSE: experiments
     else:
         sp = pl.read_parquet(NORM / "cand" / f"{name}_sparse" / "*.parquet")
-        de = pl.read_parquet(NORM / "cand" / f"{name}_dense" / "*.parquet")
+        de = pl.read_parquet(NORM / "cand" / f"{name}_dense{DENSE_TAG}" / "*.parquet")
     return add_extras(merge_channels(sp, de), load_extras(name))
 
 

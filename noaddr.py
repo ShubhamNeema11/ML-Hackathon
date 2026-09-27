@@ -26,7 +26,7 @@ import ranker
 from ranker import FEATURES, NORM, ground_truth, read_texts, retrieval_features, string_features
 
 TFIDF = os.environ.get("ER_NA_TFIDF", "1") == "1"   # candidates from blocking_noaddr.py (char 3-gram TF-IDF) instead of the old name-only extras
-TAGV = "2" if TFIDF else ""                          # feature files feat_noaddr2_<split>.parquet (old: feat_noaddr_<split>.parquet)
+TAGV = ("2" if TFIDF else "") + __import__("block").DENSE_TAG                          # feature files feat_noaddr2_<split>.parquet (old: feat_noaddr_<split>.parquet)
 MODEL = ranker.ROOT / "models" / os.environ.get("ER_NOADDR_MODEL", "noaddr_c.txt" if TFIDF else "noaddr_a.txt")
 NEW = ["name_ratio_gap", "name_tset_gap", "name_jw_gap", "name_ratio_rank", "n_name97", "n_name90", "s_name_twins", "cand_dup_frac"]
 TF = ["tf_score", "tf_rank", "tf_gap_best", "tf_ratio", "tf_ties", "tf_n_close"]
@@ -63,7 +63,7 @@ def regular_dense():
     import embed
     keep = pl.read_parquet(NORM / "trainall_queries.parquet")
     qt = pl.concat([embed.texts("train", i).join(keep, on="entity_id", how="semi") for i in (2, 3)])
-    embed.search(embed.texts("train", 1), lambda c: [qt.filter(pl.col("country") == c)], embed.load_model(), out_dir=NORM / "cand" / "trainall_dense")
+    embed.search(embed.texts("train", 1), lambda c: [qt.filter(pl.col("country") == c)], embed.load_model(), out_dir=NORM / "cand" / f"trainall_dense{embed.DENSE_TAG}")
     print(f"trainall dense candidates for {qt.height:,} records", flush=True)
 
 
@@ -120,7 +120,7 @@ def build(split: str):
     if split == "test":  # 180M test pairs do not fit in memory: keep only these records' rows, part by part
         keep = lambda d: d.join(rec, on="rec", how="semi")
         sp = pl.concat([keep(pl.read_parquet(p)) for p in sorted((NORM / "cand" / "test_sparse").glob("part*.parquet"))])
-        de = pl.concat([keep(pl.read_parquet(p)) for p in sorted((NORM / "cand" / "test_dense").glob("*.parquet"))])
+        de = pl.concat([keep(pl.read_parquet(p)) for p in sorted((NORM / "cand" / f"test_dense{ranker.DENSE_TAG}").glob("*.parquet"))])
         c = ranker.merge_channels(sp, de)
         c = ranker.add_extras(c, None if TFIDF else ranker.load_extras("test")).join(rec, on="rec", how="semi")
     else:
