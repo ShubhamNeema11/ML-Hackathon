@@ -50,9 +50,14 @@ Each fix corrects a mechanism; the mechanism's cost is measured on labelled US /
 | French address damage | 0.9864 | -0.0005 | ~ +0.0001 | france2, france3 |
 | legal forms inside names / dotted | 0.9864 | -0.0005 | ~ +0.0001 | france3 |
 | generic list widened (risk check) | 0.9868 | -0.0001 | neutral | france3 |
+| address damage in features AND the embedder's text | 0.9862 | -0.0007 (embedder part -0.0002) | ~ +0.00003 for re-embedding France: not done | - |
 
 *(test, no labels)* effect on French records: address similarity of confident matches median 93 -> 100 (share < 90: 30% -> 1.5%);
 unsure French share 14.0% -> 13.1% (france) -> 13.0% (france2). US / India predictions byte-identical. Logs: output_france*/FRANCE_CHECK.txt.
+
+SHAP (france_shap.py, test candidates, no labels): the largest French penalty is the dense channel (dense_margin -0.32, dense_score -0.27 log-odds vs US / India);
+clean French text raises French dense cosine 0.915 -> 0.967, but on labelled data the embedder's share of the damage is only -0.0002, so the dense penalty is not a
+text-format problem (more likely more look-alike candidates in the French data).
 
 ## Final file
 output_final/ = B2 + specialist + all French fixes (france3) + pass 2. Expected LB about **0.982** (0.98011 + ~0.0011 France + ~0.0006 pass 2).

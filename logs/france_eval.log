@@ -9,3 +9,7 @@ SUMMARY (report half): clean 0.9869, addr 0.9864, name 0.9864, generic 0.9868
   generic: widening changes the labelled score by -0.0001 (negative = the French generic list is a risk)
 
 [exited with code 0]
+RESULT clean held-out (US / India, as B2 sees them)               tuned 0.9878   REPORT 0.9869  (report: TP 18687, FP wrong 18, FP orphan-w 29)
+RESULT French-style address damage in features AND embeddings     tuned 0.9872   REPORT 0.9862  (report: TP 18643, FP wrong 19, FP orphan-w 29)
+SUMMARY (report half): clean 0.9869, dense_addr 0.9862
+  dense_addr: mechanism cost on labelled data +0.0007  ->  expected effect of its fix on the leaderboard (France ~15% of S1) about +0.0001
