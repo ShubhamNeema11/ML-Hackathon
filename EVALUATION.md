@@ -143,3 +143,18 @@ Correction: no run ever set ER_ORPHAN_SHARE, so decision_pass2.json (output_fina
 The lower-threshold rule still wins at the test share, so it is probably NOT why output_cd_p2xrq scored below output_final. The remaining
 difference is the country-specific normalization rules (off in the generic files), which offline data cannot measure.
 Next: run_cd_rules.sh = generic models + rules back on at test time (no training) -> output_cdr_rules / output_cdr_rules_x.
+
+## LB: output_cd_p2rq = 0.9815 (generic + raw names + name-only reranker + pass 2, old rule) vs output_final 0.9809
+- Generic models with code dropout beat the hand-written rules pipeline by +0.0006 on the LB.
+- output_cd_p2xrq (same scores, lower-threshold exact rule) scored below 0.9809 -> the lower thresholds cost ~0.001 on test, although they
+  win offline (also at a 40-45% share of ownerless records). Its 38,464 extra links vs the 0.9815 file:
+| records | links in 0.9815 file | extra links (lower thresholds) | per link |
+|---|---|---|---|
+| country not in training, no address | 23,675 | 1,795 | 7.6% |
+| country not in training, address | 833,391 | 12,528 | 1.5% |
+| training countries, no address | 132,596 | 7,277 | 5.5% |
+| training countries, address | 4,847,326 | 16,864 | 0.35% |
+  Records from a country the training data lacks are 14% of the test records but 37% of the extra links (4x the rate on address records):
+  their scores are less reliable, which the training mirror (training countries only) cannot show.
+- predict.py ER_DECISION_UNSEEN=<rule>: a separate rule for records whose country is not in the training data (found from the data).
+  run_split.sh: exact rule for training countries + the 0.9815 file's rule for the rest -> output_cd_p2rq_split, output_cdr_rules_split.

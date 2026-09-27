@@ -137,6 +137,12 @@ def write(threshold: float | None = None):
         print(f"decision rule {dec}", flush=True)
         n_s1_ = pl.scan_parquet(NORM / "test_source1.parquet").select(pl.len()).collect().item()
         has_addr = pl.concat([pl.scan_parquet(NORM / f"test_source{i}.parquet").select("has_addr") for i in (2, 3)]).collect()["has_addr"].to_numpy()
+        dec_u, unseen = None, None
+        if os.environ.get("ER_DECISION_UNSEEN"):   # a second (stricter) rule for records from countries the training data does not contain
+            dec_u = json.loads((DECISION_PATH.parent / os.environ["ER_DECISION_UNSEEN"]).read_text(encoding="utf-8"))
+            seen = pl.concat([pl.read_parquet(NORM / f"source{i}.parquet", columns=["country"]) for i in (1, 2, 3)])["country"].unique()
+            unseen = ~pl.concat([pl.scan_parquet(NORM / f"test_source{i}.parquet").select("country") for i in (2, 3)]).collect()["country"].is_in(seen).to_numpy()
+            print(f"records from countries not in the training data: {unseen.sum():,} -> rule {dec_u}", flush=True)
     OUT.mkdir(exist_ok=True)
     ids = ids_table()
     names = ids["entity_id"]
@@ -176,6 +182,10 @@ def write(threshold: float | None = None):
         pv, p2v, fbv = best["p"].to_numpy(), best["p2"].to_numpy(), best["is_fb"].to_numpy()
         thr = np.where(adr, dec["thr_addr"], dec["thr_noaddr"])
         mg = np.where(adr, dec["margin"], dec.get("margin_noaddr", dec["margin"]))  # optional separate margin for records without an address (noaddr.py)
+        if dec_u is not None:
+            un = unseen[best["rec_i"].to_numpy() - n_s1_]
+            thr = np.where(un, np.where(adr, dec_u["thr_addr"], dec_u["thr_noaddr"]), thr)
+            mg = np.where(un, np.where(adr, dec_u["margin"], dec_u.get("margin_noaddr", dec_u["margin"])), mg)
         keep = np.where(fbv, pv >= fb_thr, (pv >= thr) & ((pv - p2v) >= mg))
         best = best.filter(pl.Series(keep))
     print(f"{'rule ' + str(dec) if dec else 'threshold ' + str(threshold)}: {best.height:,} records assigned an S1 owner ({time.time() - t0:.0f}s)", flush=True)
