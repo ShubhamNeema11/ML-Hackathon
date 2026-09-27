@@ -1,0 +1,6 @@
+train pairs by country: [{'country': 'India', 'len': 7005396}, {'country': 'US', 'len': 10298618}] | eval: [{'country': 'US', 'len': 1900705}, {'country': 'India', 'len': 1284079}]
+19 continuous features made country-relative; dropped codes: ['legal_code_q', 'legal_code_s', 'state_code_q', 'state_code_s']
+RESULT raw features, trained on US only (unseen India) India 0.9586 (P 0.9824 R 0.9156)   US 0.9850
+RESULT country-relative features, US only           India 0.9151 (P 0.9209 R 0.9378)   US 0.9267
+RESULT raw features without codes, US only          India 0.9620 (P 0.9807 R 0.9298)   US 0.9851
+RESULT raw features, trained on US + India (seen)   India 0.9874 (P 0.9972 R 0.9659)   US 0.9847

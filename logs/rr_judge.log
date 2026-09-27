@@ -1,0 +1,9 @@
+held-out band: 53,443 pairs, 5,830 true, 21,950 records
+B2 p only                                               AUC 0.9924  logloss 0.0665  top-1 right 0.2541
+B2 p + current cross-encoder                            AUC 0.9929  logloss 0.0649  top-1 right 0.2543
+B2 p + NEW reranker                                     AUC 0.9926  logloss 0.0659  top-1 right 0.2541
+B2 p + current CE + NEW reranker                        AUC 0.9930  logloss 0.0643  top-1 right 0.2549
+B2 p + current CE + zero-shot name/addr (this morning)  AUC 0.9932  logloss 0.0628  top-1 right 0.2551
+
+logloss with the new reranker vs the current cross-encoder alone: 0.0649 -> 0.0643 (-0.8%)
+zero-shot reference this morning: 0.0651 -> 0.0627 (-3.7%), and ranker C built on it gave 0.0000 on the official score

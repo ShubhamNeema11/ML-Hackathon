@@ -188,7 +188,10 @@ FEATURES_BASE = ["sparse_score", "sparse_rank", "dense_score", "dense_rank", "bo
                  "extra_rank"]
 # ER_STRUCT=0 -> the previous 29-feature model (ablation); ER_STATE_CATS=0 -> keep the pair verdict but not the raw state codes
 _STRUCT = [f for f in structfeat.STRUCT_FEATURES
-           if os.environ.get("ER_STATE_CATS", "1") == "1" or f not in ("state_code_q", "state_code_s")]
+           if (os.environ.get("ER_STATE_CATS", "1") == "1" or f not in ("state_code_q", "state_code_s"))
+           and (os.environ.get("ER_LEGAL_CATS", "1") == "1" or f not in ("legal_code_q", "legal_code_s"))]
+# ER_STATE_CATS=0 ER_LEGAL_CATS=0: no country-specific code features. Leave-one-country-out (loco.py): a US-only model scores an unseen
+# country (India) 0.9586 with the codes and 0.9620 without, the seen country unchanged (0.9850 / 0.9851) -> generalizes better to France
 FEATURES = FEATURES_BASE + (_STRUCT if os.environ.get("ER_STRUCT", "1") == "1" else [])
 # optional cross-encoder evidence (crossenc.py): NaN where a pair was not scored
 if os.environ.get("ER_CE", "0") == "1":

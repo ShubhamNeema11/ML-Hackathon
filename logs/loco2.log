@@ -1,0 +1,2 @@
+RESULT a) no codes, no name-length / state / city flags (US thresholds) India 0.9598 (P 0.9785 R 0.9282)  thresholds 0.97/0.95/0.3
+RESULT b) no codes, thresholds tuned on INDIA (oracle calibration)    India 0.9628 (P 0.9782 R 0.9386)  thresholds 0.93/0.99/0.3

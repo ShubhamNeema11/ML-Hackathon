@@ -59,5 +59,26 @@ SHAP (france_shap.py, test candidates, no labels): the largest French penalty is
 clean French text raises French dense cosine 0.915 -> 0.967, but on labelled data the embedder's share of the damage is only -0.0002, so the dense penalty is not a
 text-format problem (more likely more look-alike candidates in the French data).
 
+## Bigger models (Stage 1 on AWS, L4 GPU; judged on held-out data)
+| model | held-out result | verdict |
+|---|---|---|
+| embedder BAAI/bge-m3 fine-tuned (600k training pairs) | owner recall dense@10 0.9907 -> 0.9914, union 0.9921 -> 0.9927, dense@1 0.9744 -> 0.9770 | borderline |
+| reranker BAAI/bge-reranker-v2-m3 fine-tuned listwise (65,940 groups) | band logloss with B2 p: current CE 0.0649, new reranker alone 0.0659, both 0.0643 (-0.8%) | no gain (zero-shot gave -3.7% and 0.0000 official) |
+Stage 2 (new candidates + reranker features, 5-6 h) not run: expected gain too small. Logs: logs/rr_judge.log, stage1 RESULT (chat).
+
+## Root cause: an unseen country (leave-one-country-out, loco.py / loco2.py, labelled data)
+Model trained on US only, India held out as the unseen country (as France is for us):
+| variant | India (unseen) | US |
+|---|---|---|
+| trained on US + India (seen) | 0.9874 | 0.9847 |
+| US only, B2's features | 0.9586 | 0.9850 |
+| US only, country-relative percentile features | 0.9151 | 0.9267 |
+| **US only, without country codes (state / legal codes)** | **0.9620** | 0.9851 |
+| US only, without codes and without name-length / state / city flags | 0.9598 | - |
+| US only, without codes, thresholds tuned on India (oracle calibration) | 0.9628 | - |
+An unseen country costs ~0.025-0.03 and it is neither thresholds (+0.0008 at best) nor country features: the model has not learned that
+country's record variation. The one generic gain: drop the country codes (+0.0034 on the unseen country, seen country unchanged).
+Logs: logs/loco.log, logs/loco2.log.
+
 ## Final file
 output_final/ = B2 + specialist + all French fixes (france3) + pass 2. Expected LB about **0.982** (0.98011 + ~0.0011 France + ~0.0006 pass 2).
