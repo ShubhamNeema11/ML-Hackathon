@@ -123,3 +123,23 @@ Name-only side = raw names; address side = normalized name + full address. Recor
 | | average of both | 0.9514 | 0.9902 | 0.9918 |
 The pretrained reranker is worse on both sides (it ranks query-passage relevance, not "same business"); averaging adds nothing.
 Speed on the laptop GPU: ~1,000 pairs/s name-only, ~420/s address.
+
+## Name-only rerankers pretrained for company names (logs/name_models_compare.log)
+Same held-out name-only pairs, raw names (1,401 records with the owner among >= 2 candidates, 377 with an identical-name twin):
+| reranker | AUC | top-1 | non-twins | twins |
+|---|---|---|---|---|
+| ours ce_nar (fine-tuned on our name-only data) | **0.8876** | **0.7402** | **0.9102** | 0.2785 |
+| bge-reranker-v2-m3 (general) | 0.8194 | 0.6809 | 0.8350 | 0.2626 |
+| Vsevolod/company-names-similarity-sentence-transformer | 0.7784 | 0.6453 | 0.7988 | 0.2281 |
+| easonanalytica/cnm-multilingual-small-v2 | 0.6868 | 0.3904 | 0.4658 | 0.1857 |
+Company-name models call any similar name a match; all our candidates already have similar names. Ours stays.
+
+## Exact-metric rule with records without an owner weighted to the test share (exact_tune.py ER_TEST_ORPHAN_SHARE; logs/exact_tune_p2_orphan.log)
+Correction: no run ever set ER_ORPHAN_SHARE, so decision_pass2.json (output_final's rule) was tuned at the training share 0.26 too.
+| test share | old rule (0.8, 0.7, 0.1) A / B | exact-tuned rule A / B |
+|---|---|---|
+| 0.40 | 0.9877 / 0.9882 | (0.65, 0.5, 0.3, 0.3) 0.9882 / 0.9883 |
+| 0.45 | 0.9874 / 0.9880 | (0.65, 0.6, 0.3, 0.3) 0.9879 / 0.9880 |
+The lower-threshold rule still wins at the test share, so it is probably NOT why output_cd_p2xrq scored below output_final. The remaining
+difference is the country-specific normalization rules (off in the generic files), which offline data cannot measure.
+Next: run_cd_rules.sh = generic models + rules back on at test time (no training) -> output_cdr_rules / output_cdr_rules_x.

@@ -1,0 +1,13 @@
+To support symlinks on Windows, you either need to activate Developer Mode or to run Python as an administrator. In order to activate developer mode, see this article: https://docs.microsoft.com/en-us/windows/apps/get-started/enable-your-device-for-development
+To support symlinks on Windows, you either need to activate Developer Mode or to run Python as an administrator. In order to activate developer mode, see this article: https://docs.microsoft.com/en-us/windows/apps/get-started/enable-your-device-for-development
+Loading weights:   0%|          | 0/199 [00:00<?, ?it/s]Loading weights: 100%|██████████| 199/199 [00:00<00:00, 11249.33it/s]
+encoded easonanalytica/cnm-multilingual-small-v2
+To support symlinks on Windows, you either need to activate Developer Mode or to run Python as an administrator. In order to activate developer mode, see this article: https://docs.microsoft.com/en-us/windows/apps/get-started/enable-your-device-for-development
+Loading weights:   0%|          | 0/103 [00:00<?, ?it/s]Loading weights: 100%|██████████| 103/103 [00:00<00:00, 7272.09it/s]
+encoded Vsevolod/company-names-similarity-sentence-transformer
+NAME-ONLY: 16,032 pairs, 1,401 records with the owner among >= 2 candidates (377 with an identical-name twin)
+  ours ce_nar (fine-tuned on our name-only data)   AUC 0.8876   top-1 correct 0.7402   non-twins 0.9102   twins 0.2785
+  bge-reranker-v2-m3 (general reranker)            AUC 0.8194   top-1 correct 0.6809   non-twins 0.8350   twins 0.2626
+  cnm-multilingual-small-v2 (company names)        AUC 0.6868   top-1 correct 0.3904   non-twins 0.4658   twins 0.1857
+  Vsevolod company-names (company names)           AUC 0.7784   top-1 correct 0.6453   non-twins 0.7988   twins 0.2281
+  ours + cnm averaged                              AUC 0.8380   top-1 correct 0.7116   non-twins 0.8691   twins 0.2838

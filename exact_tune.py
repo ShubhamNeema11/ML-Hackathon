@@ -5,6 +5,7 @@ margin), plus an optional extra: a lower threshold when the record's best S1 alr
   python exact_tune.py [pred_dir]         default fulltrain/normalized/pred_na; writes models/decision_exact.json
 """
 import itertools
+import os
 import json
 import sys
 from pathlib import Path
@@ -16,6 +17,9 @@ from block import ground_truth, is_val_s1
 
 MN = Path("fulltrain/normalized")
 PRED = Path(sys.argv[1]) if len(sys.argv) > 1 else MN / "pred_na"
+BASE_DEC = sys.argv[2] if len(sys.argv) > 2 else "models/decision_na.json"
+OUT = sys.argv[3] if len(sys.argv) > 3 else "models/decision_exact.json"
+TEST_ORPHAN = float(os.environ.get("ER_TEST_ORPHAN_SHARE", 0))   # >0: weight wrong links of records WITHOUT an owner so their share matches the test set (~0.40)
 
 
 def load():
@@ -36,14 +40,18 @@ def load():
     ntrue = gt.join(held.select("s1_i", "half_b"), on="s1_i").group_by("s1_i").len()
     hs = held.join(ntrue, on="s1_i", how="left").with_columns(pl.col("len").fill_null(0))
     pos = {v: k for k, v in enumerate(hs["s1_i"].to_list())}
-    return dict(s1pos=np.array([pos[v] for v in b["s1_i"].to_list()]), p1=b["p1"].to_numpy(), m=(b["p1"] - b["p2"]).to_numpy(),
+    orphan = b["true_s1"].is_null().to_numpy()
+    share = 1 - gt["rec_i"].n_unique() / len(addr)                                   # training share of S2/S3 records without an owner
+    w = (TEST_ORPHAN / (1 - TEST_ORPHAN)) / (share / (1 - share)) if TEST_ORPHAN > 0 else 1.0
+    print(f"records without an owner: training share {share:.3f}; weight of their wrong links {w:.2f}", flush=True)
+    return dict(w=np.where(orphan, w, 1.0), s1pos=np.array([pos[v] for v in b["s1_i"].to_list()]), p1=b["p1"].to_numpy(), m=(b["p1"] - b["p2"]).to_numpy(),
                 addr=addr[b["rec_i"].to_numpy() - n1], correct=(b["true_s1"] == b["s1_i"]).fill_null(False).to_numpy(),
                 ntrue=hs["len"].to_numpy(), half_b=hs["half_b"].to_numpy())
 
 
 def score(D, acc, which):
     k = len(D["ntrue"])
-    npred = np.bincount(D["s1pos"][acc], minlength=k); tp = np.bincount(D["s1pos"][acc & D["correct"]], minlength=k)
+    npred = np.bincount(D["s1pos"][acc], weights=D["w"][acc], minlength=k); tp = np.bincount(D["s1pos"][acc & D["correct"]], minlength=k)
     nt = D["ntrue"]
     prec = np.where(npred > 0, tp / np.maximum(npred, 1), 0.0); rec = np.where(nt > 0, tp / np.maximum(nt, 1), 0.0)
     f = np.where(prec + rec > 0, 1.25 * prec * rec / np.maximum(0.25 * prec + rec, 1e-12), 0.0)
@@ -58,7 +66,7 @@ def rule(D, ta, tn, mg, mn):
 
 def main():
     D = load()
-    cur = json.loads(Path("models/decision_na.json").read_text())
+    cur = json.loads(Path(BASE_DEC).read_text())
     c = (cur["thr_addr"], cur["thr_noaddr"], cur["margin"], cur.get("margin_noaddr", cur["margin"]))
     acc = rule(D, *c)
     print(f"current rule {c}: exact metric  half A {score(D, acc, 'A'):.4f}   half B {score(D, acc, 'B'):.4f}", flush=True)
@@ -67,7 +75,7 @@ def main():
     best = max(((score(D, rule(D, ta, tn, mg, mn), "A"), (ta, tn, mg, mn)) for ta, tn, mg, mn in itertools.product(grid_t, grid_t, grid_m, grid_m)), key=lambda z: z[0])
     acc = rule(D, *best[1])
     print(f"tuned on the EXACT metric (half A) {best[1]}: half A {best[0]:.4f}   half B (not tuned on) {score(D, acc, 'B'):.4f}", flush=True)
-    Path("models/decision_exact.json").write_text(json.dumps(dict(zip(("thr_addr", "thr_noaddr", "margin", "margin_noaddr"), best[1]),
+    Path(OUT).write_text(json.dumps(dict(zip(("thr_addr", "thr_noaddr", "margin", "margin_noaddr"), best[1]),
                                                                   exact_half_a=best[0], exact_half_b=score(D, acc, "B"))), encoding="utf-8")
 
 
