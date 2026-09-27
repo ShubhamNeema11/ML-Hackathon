@@ -25,7 +25,7 @@ GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head 
 BF16=$(python -c "import torch; print(1 if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 0)")
 if [ "${GPU_MB:-0}" -ge 30000 ]; then MB=128; ENC=1024; elif [ "${GPU_MB:-0}" -ge 20000 ]; then MB=64; ENC=512; else MB=16; ENC=256; fi
 echo "GPU: ${GPU_NAME:-none} (${GPU_MB:-0} MiB), bf16 $BF16 -> micro-batch $MB, encode batch $ENC"
-[ "${GPU_MB:-0}" -ge 14000 ] || [ "${STAGE1_CHECK:-0}" = 1 ] || { echo "a 568M embedder needs a GPU with at least ~15 GB to fine-tune; set ER_EMBED_BASE=intfloat/multilingual-e5-base for a smaller card"; exit 1; }
+[ "${GPU_MB:-0}" -ge 14000 ] || [ "${STAGE1_CHECK:-0}" = 1 ] || [ "${ER_ALLOW_SMALL_GPU:-0}" = 1 ] || { echo "a 568M embedder needs a GPU with at least ~15 GB to fine-tune; set ER_EMBED_BASE=intfloat/multilingual-e5-base for a smaller card"; exit 1; }
 export ER_EMBED_BASE="${ER_EMBED_BASE:-BAAI/bge-m3}" ER_EMBED_DIR="${ER_EMBED_DIR:-m3_er}" ER_EMBED_BF16="${ER_EMBED_BF16:-$BF16}"
 export ER_TRAIN_BATCH="${ER_TRAIN_BATCH:-512}" ER_MINI_BATCH="${ER_MINI_BATCH:-$MB}" ER_EMBED_LR="${ER_EMBED_LR:-2e-5}" ER_EMBED_EPOCHS="${ER_EMBED_EPOCHS:-1}"
 export ER_ENCODE_BATCH="${ER_ENCODE_BATCH:-$ENC}" ER_SEARCH_BATCH="${ER_SEARCH_BATCH:-$ENC}"
