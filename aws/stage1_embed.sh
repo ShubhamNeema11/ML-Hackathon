@@ -13,9 +13,15 @@ cd "$(dirname "$0")/.."
 [ -f .venv/bin/activate ] && source .venv/bin/activate
 [ -z "${ER_DATASET:-}" ] && { [ -d "$PWD/data/train" ] && ER_DATASET="$PWD/data" || ER_DATASET=/data/dataset; }
 export PYTHONUTF8=1 ER_ROOT="${ER_ROOT:-$HOME/er_stage1}" ER_DATASET
-export ER_EMBED_BASE="${ER_EMBED_BASE:-BAAI/bge-m3}" ER_EMBED_DIR="${ER_EMBED_DIR:-m3_er}" ER_EMBED_BF16="${ER_EMBED_BF16:-1}"
-export ER_TRAIN_BATCH="${ER_TRAIN_BATCH:-512}" ER_MINI_BATCH="${ER_MINI_BATCH:-64}" ER_EMBED_LR="${ER_EMBED_LR:-2e-5}" ER_EMBED_EPOCHS="${ER_EMBED_EPOCHS:-1}"
-export ER_ENCODE_BATCH="${ER_ENCODE_BATCH:-512}" ER_SEARCH_BATCH="${ER_SEARCH_BATCH:-512}"
+# the GPU decides the settings (the instance type is fixed): bf16 only on Ampere+ (A10G, A100, L4); memory decides the micro-batch
+GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1); GPU_MB=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1)
+BF16=$(python -c "import torch; print(1 if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 0)")
+if [ "${GPU_MB:-0}" -ge 30000 ]; then MB=128; ENC=1024; elif [ "${GPU_MB:-0}" -ge 20000 ]; then MB=64; ENC=512; else MB=16; ENC=256; fi
+echo "GPU: ${GPU_NAME:-none} (${GPU_MB:-0} MiB), bf16 $BF16 -> micro-batch $MB, encode batch $ENC"
+[ "${GPU_MB:-0}" -ge 14000 ] || { echo "a 568M embedder needs a GPU with at least ~15 GB to fine-tune; set ER_EMBED_BASE=intfloat/multilingual-e5-base for a smaller card"; exit 1; }
+export ER_EMBED_BASE="${ER_EMBED_BASE:-BAAI/bge-m3}" ER_EMBED_DIR="${ER_EMBED_DIR:-m3_er}" ER_EMBED_BF16="${ER_EMBED_BF16:-$BF16}"
+export ER_TRAIN_BATCH="${ER_TRAIN_BATCH:-512}" ER_MINI_BATCH="${ER_MINI_BATCH:-$MB}" ER_EMBED_LR="${ER_EMBED_LR:-2e-5}" ER_EMBED_EPOCHS="${ER_EMBED_EPOCHS:-1}"
+export ER_ENCODE_BATCH="${ER_ENCODE_BATCH:-$ENC}" ER_SEARCH_BATCH="${ER_SEARCH_BATCH:-$ENC}"
 mkdir -p "$ER_ROOT/logs"
 for f in normalized/source1.parquet normalized/source2.parquet normalized/source3.parquet normalized/eval_queries.parquet normalized/eval_sparse.parquet; do
   [ -f "$ER_ROOT/$f" ] || { echo "missing $ER_ROOT/$f (upload the stage-1 folder)"; exit 1; }
