@@ -13,6 +13,7 @@ models/struct_vocab.json so that train and test use exactly the same lists. The 
 tables in normalize.py; codes of countries that never occur in training (France) simply get no training rows.
 """
 import json
+import os
 
 import polars as pl
 
@@ -23,6 +24,9 @@ VOCAB_PATH = ROOT / "models" / "struct_vocab.json"
 N_LEGAL = 60      # most frequent legal forms of S1 that get their own code
 N_GENERIC = 300   # most frequent (= generic) name words of S1: "group", "services", "holdings", ...
 
+# French legal form -> the known (training) form whose code it borrows: limited-liability / single-member / simplified joint-stock /
+# single-member simplified / public company / civil real-estate / general partnership / sole trader
+FR_LEGAL = {"sarl": "llc", "eurl": "ltd", "sas": "inc", "sasu": "corp", "sa": "co", "sci": "llp", "snc": "lp", "ei": "pc"}
 CATEGORICAL = ["legal_code_q", "legal_code_s", "state_code_q", "state_code_s"]
 CONFLICT_FLAGS = ["num_conflict", "unit_conflict", "legal_conflict", "state_conflict"]  # constrained: conflict never raises p
 STRUCT_FEATURES = [
@@ -62,6 +66,13 @@ def entity_lists(t: pl.DataFrame) -> pl.DataFrame:
     """Adds the per-entity list / code columns. Needs addr_latin, name_core, legal_form, state."""
     v = load_vocab()
     legal_idx = {x: i + 1 for i, x in enumerate(v["legal"])}
+    # French legal forms never occur in training, so they all got code 0 ("no legal form"), which costs B2 about 0.006 on held-out data
+    # (US / India pairs with their codes set to 0). A consistent mapping to distinct known codes recovers almost all of it (0.9864 vs 0.9869).
+    # Each French form gets its own code of a close-ish known form; the strings never appear in US / India data, so nothing changes there.
+    if os.environ.get("ER_FR_LEGAL", "1") == "1":
+        for fr, known in FR_LEGAL.items():
+            if known in legal_idx and fr not in legal_idx:
+                legal_idx[fr] = legal_idx[known]
     generic = v["generic"]
     a = pl.col("addr_latin").fill_null("").str.to_lowercase()
     nums = (a.str.extract_all(r"\d+").list.eval(pl.element().cast(pl.Int64, strict=False))  # int cast drops leading zeros
