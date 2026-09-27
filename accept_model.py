@@ -8,6 +8,7 @@ Address records only (records without an address are decided by the specialist, 
   ER_CE=1 ER_CE_TAG=_v2 ER_FEAT_TAG=_ce2 python accept_model.py
 """
 import json
+import os
 
 import lightgbm as lgb
 import numpy as np
@@ -17,9 +18,11 @@ import noaddr
 import ranker
 from ranker import NORM, REAL_ORPHAN_SHARE, ground_truth
 
-TOPF = ["name_ratio", "name_tset", "name_jw", "name_native_ratio", "addr_tset", "addr_partial", "ce_score", "ce_gap_best", "dense_score",
+TOPF_FULL = ["name_ratio", "name_tset", "name_jw", "name_native_ratio", "addr_tset", "addr_partial", "ce_score", "ce_gap_best", "dense_score",
         "dense_margin", "sparse_score", "both", "num_equal", "num_conflict", "unit_conflict", "legal_conflict", "rare_only_q", "rare_only_s",
         "postal_eq", "city_eq", "state_eq", "from_s3", "n_cands", "q_name_len", "s_name_len"]
+# ER_ACCEPT_PONLY=1: probabilities only (p1 / p2 / p3 / margin / plausible count) - what the stored test scores allow without recomputing features
+TOPF = [] if os.environ.get("ER_ACCEPT_PONLY", "0") == "1" else TOPF_FULL
 
 
 def record_features(ev: pl.DataFrame, p: np.ndarray) -> pl.DataFrame:
