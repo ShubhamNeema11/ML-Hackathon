@@ -1,0 +1,10 @@
+
+== NAME-ONLY (raw names): 16,032 pairs, 1,401 records with the owner among >= 2 candidates (377 with an identical-name twin)
+  ours: ce_nar (e5-small, fine-tuned)    AUC 0.8876   top-1 correct 0.7402   on twins 0.2785
+  bge-reranker-v2-m3 (pretrained)        AUC 0.8194   top-1 correct 0.6809   on twins 0.2626
+  average of both (rank-normalized)      AUC 0.8751   top-1 correct 0.7352   on twins 0.2812
+
+== ADDRESS (normalized name + full address): 39,892 pairs, 4,610 records with the owner among >= 2 candidates (365 with an identical-name twin)
+  ours: ce_er2 (fine-tuned)              AUC 0.9910   top-1 correct 0.9894   on twins 0.9973
+  bge-reranker-v2-m3 (pretrained)        AUC 0.8340   top-1 correct 0.9783   on twins 0.9753
+  average of both (rank-normalized)      AUC 0.9514   top-1 correct 0.9902   on twins 0.9918

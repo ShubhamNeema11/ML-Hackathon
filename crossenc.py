@@ -44,7 +44,9 @@ STAGE1 = ROOT / "models" / os.environ.get("ER_STAGE1", "ranker_final_backup.txt"
 BAND = tuple(float(x) for x in os.environ.get("ER_CE_BAND", "0.05,0.99").split(","))
 TOPK = int(os.environ.get("ER_CE_TOPK", 2))
 MAX_LEN = int(os.environ.get("ER_CE_MAXLEN", 128))
-TEXT = os.environ.get("ER_CE_TEXT", "joint")
+SIDE = os.environ.get("ER_CE_SIDE", "")   # separate rerankers: "noaddr" = records without an address, raw names only; "addr" = records with an address, normalized name + full address
+TEXT = os.environ.get("ER_CE_TEXT", {"noaddr": "raw_name", "addr": "joint"}.get(SIDE, "joint"))
+PRETRAINED = os.environ.get("ER_CE_PRETRAINED", "")   # score with an off-the-shelf reranker (e.g. BAAI/bge-reranker-v2-m3) instead of models/<ER_CE_MODEL_DIR>
 HIDE_STATE = float(os.environ.get("ER_CE_HIDE_STATE", 0))   # share of entities whose trailing state code is removed from the text (1 = all, for the dependence test; 0.5 = training dropout)
 LOSS = os.environ.get("ER_CE_LOSS", "bce")
 NEG_PER_REC = int(os.environ.get("ER_CE_NEG", 2))
@@ -272,12 +274,17 @@ def score(split: str):
     t0 = time.time()
     pairs, prefix = band_pairs(split) if not os.environ.get("ER_CE_PAIRS") else (pl.read_parquet(os.environ["ER_CE_PAIRS"]).select("rec", "s1"), "test_" if split == "test" else "")
     # ER_CE_PAIRS=<parquet of (rec, s1)>: score exactly these pairs (noaddr.py cascade) instead of the uncertain band
+    if SIDE:   # keep only the pairs of this side's records
+        ha = pl.concat([pl.read_parquet(NORM / f"{prefix}source{i}.parquet", columns=["entity_id", "has_addr"]) for i in (2, 3)]).rename({"entity_id": "rec"})
+        pairs = pairs.join(ha.filter(pl.col("has_addr") == (SIDE == "addr")).select("rec"), on="rec", how="semi")
     cap = int(os.environ.get("ER_CE_MAX_PAIRS", 0))
     if cap:
         pairs = pairs.head(cap)
     print(f"{split}: {pairs.height:,} pairs in the uncertain band / without address to score ({time.time() - t0:.0f}s)", flush=True)
-    tok = AutoTokenizer.from_pretrained(CE_DIR, trust_remote_code=TRUST)
-    model = AutoModelForSequenceClassification.from_pretrained(CE_DIR, trust_remote_code=TRUST).cuda().to(torch.bfloat16 if DTYPE == "bf16" else torch.float16).eval()
+    src = PRETRAINED or CE_DIR
+    print(f"reranker: {src}  side: {SIDE or 'all'}  text: {TEXT}", flush=True)
+    tok = AutoTokenizer.from_pretrained(src, trust_remote_code=TRUST)
+    model = AutoModelForSequenceClassification.from_pretrained(src, trust_remote_code=TRUST).cuda().to(torch.bfloat16 if DTYPE == "bf16" else torch.float16).eval()
     parts, step = [], 500_000
     for lo in range(0, pairs.height, step):
         pt = pair_texts(pairs.slice(lo, step), prefix).with_columns(pl.col("text_a").fill_null(""), pl.col("text_b").fill_null(""))

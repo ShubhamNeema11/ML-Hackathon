@@ -109,3 +109,17 @@ Held-out eval pairs re-scored by ce_er2 with the trailing state code removed fro
 | state hidden | 0.9907 | 0.9874 | 0.9867 |
 Scores move by 0.009 on average: the reranker barely uses the state token, so retraining it with the state hidden (8-10 h) is not
 expected to change the unseen-country result. Not pursued.
+
+## Separate rerankers per side with a PRETRAINED reranker (crossenc ER_CE_SIDE / ER_CE_PRETRAINED; logs/bge_compare.log)
+BAAI/bge-reranker-v2-m3 (568M, multilingual, off the shelf, no training) vs our fine-tuned rerankers, held-out eval pairs, each side alone.
+Name-only side = raw names; address side = normalized name + full address. Records whose owner is among >= 2 candidates:
+| side | reranker | AUC | top-1 correct | identical-name twins |
+|---|---|---|---|---|
+| name-only (1,401 rec) | ours ce_nar (e5-small, fine-tuned) | **0.8876** | **0.7402** | 0.2785 |
+| | bge-reranker-v2-m3 (pretrained) | 0.8194 | 0.6809 | 0.2626 |
+| | average of both | 0.8751 | 0.7352 | 0.2812 |
+| address (4,610 rec) | ours ce_er2 (fine-tuned) | **0.9910** | 0.9894 | **0.9973** |
+| | bge-reranker-v2-m3 (pretrained) | 0.8340 | 0.9783 | 0.9753 |
+| | average of both | 0.9514 | 0.9902 | 0.9918 |
+The pretrained reranker is worse on both sides (it ranks query-passage relevance, not "same business"); averaging adds nothing.
+Speed on the laptop GPU: ~1,000 pairs/s name-only, ~420/s address.
