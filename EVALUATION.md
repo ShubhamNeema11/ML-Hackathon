@@ -82,3 +82,14 @@ Logs: logs/loco.log, logs/loco2.log.
 
 ## Final file
 output_final/ = B2 + specialist + all French fixes (france3) + pass 2. Expected LB about **0.982** (0.98011 + ~0.0011 France + ~0.0006 pass 2).
+
+## Raw-name reranker in the name-only pipeline (noaddr_cdrq)
+
+- Reranker `models/ce_nar` (multilingual-e5-small, listwise, raw lowercased names only, training data only) scores the top-8 candidates per
+  no-address record (chosen by noaddr_cdr). Features `nar_score / nar_gap / nar_rank` added to the specialist → `models/noaddr_cdrq.txt`
+  (lr 0.05, 127 leaves, min_leaf 400, code dropout 0.5; best iteration 811). Logs: `logs/cdrq_fit.log`, `logs/cdrq_joint.log`, `logs/cdrq_compare.log`.
+- Specialist alone (held-out eval, orphan weight 0.1): F0.5 0.8402 (cdr) → **0.8470** (cdrq); the reranker features are the top features.
+- Joint held-out metric at the SAME rule (addr 0.8/0.3, no-address 0.8/0.3): cdr half A 0.9888 / half B 0.9885 → cdrq **0.9891 / 0.9886**
+  (+16 true links, −1 wrong link). cdrq ≥ cdr in 9/9 rule cells on half A and 7/9 on half B; averaging cdr+cdrq is not better than cdrq.
+- The joint tuner picked no-address 0.7/0.2 for cdrq (report half 0.9884): lowering the threshold adds more wrong links than it gains → keep 0.8.
+- Test side: `run_final_rq.sh` → `output_cd_p2xrq/` (pass 2 + decision_pass2_exact.json).

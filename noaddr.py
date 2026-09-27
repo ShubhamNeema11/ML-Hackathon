@@ -34,9 +34,15 @@ TF = ["tf_score", "tf_rank", "tf_gap_best", "tf_ratio", "tf_ties", "tf_n_close"]
 # still differ in legal-form spelling / punctuation / word forms, and when they differ the raw name points to the owner ~70% of the time
 RAW = ["raw_ratio", "raw_jw", "raw_tsort", "raw_exact", "raw_len_diff", "raw_ratio_gap", "raw_jw_gap", "raw_ratio_rank", "raw_n_best"]
 NA_RAW = os.environ.get("ER_NA_RAW", "0") == "1"
-COLS = FEATURES + NEW + (TF if TFIDF else []) + (RAW if NA_RAW else [])
+# ER_NA_RR=1: + the raw-name RERANKER (cross-encoder fine-tuned listwise on no-address training groups, crossenc.py ER_CE_TEXT=raw_name) scores of
+# each record's top candidates: nar_score, its gap to the record's best, its rank (null for candidates it did not score)
+NAR = ["nar_score", "nar_gap", "nar_rank"]
+NA_RR = os.environ.get("ER_NA_RR", "0") == "1"
+COLS = FEATURES + NEW + (TF if TFIDF else []) + (RAW if NA_RAW else []) + (NAR if NA_RR else [])
 if NA_RAW:
     TAGV = TAGV + "r"   # feat_noaddr2r_<split>.parquet: the feature files plus the raw-name columns (made by `noaddr.py raw <split>`)
+if NA_RR:
+    TAGV = TAGV + "q"   # feat_noaddr2rq_<split>.parquet: + the raw-name reranker columns (made by `noaddr.py rr_join <split>`)
 A_PARAMS = dict(objective="binary", learning_rate=0.03, num_leaves=31, min_data_in_leaf=100, feature_fraction=0.8, bagging_fraction=0.8, bagging_freq=1,
                 lambda_l2=5.0, verbose=-1, num_threads=os.cpu_count() or 8)
 
@@ -94,6 +100,31 @@ def add_raw(split: str):
                        (pl.col("raw_ratio") >= pl.col("raw_ratio").max().over("rec")).sum().over("rec").alias("raw_n_best")).drop("_qr", "_sr")
     f.write_parquet(NORM / f"feat_noaddr{src_tag}r_{split}.parquet")
     print(f"{split}: raw-name features for {f.height:,} pairs -> feat_noaddr{src_tag}r_{split}.parquet", flush=True)
+
+
+def rr_pairs(split: str, k: int = 8):
+    """Top-k candidates per record by the raw-name specialist (models/noaddr_cdr.txt) -> normalized/na_rrpairs_<split>.parquet (for the reranker)."""
+    import lightgbm as lgb
+    src = TAGV[:-1] if TAGV.endswith("q") else TAGV
+    cols = [c for c in COLS if c not in NAR]
+    f = pl.read_parquet(NORM / f"feat_noaddr{src}_{split}.parquet", columns=["rec", "s1"] + cols)
+    m = lgb.Booster(model_file=str(ranker.ROOT / "models" / os.environ.get("ER_RR_SELECT_MODEL", "noaddr_cdr.txt")))
+    f = f.with_columns(pl.Series("_p", m.predict(ranker.unseen_codes_to_unknown(f).select(cols).cast(pl.Float32).to_numpy())))
+    top = f.sort("_p", descending=True).group_by("rec", maintain_order=True).head(k).select("rec", "s1")
+    top.write_parquet(NORM / f"na_rrpairs_{split}.parquet")
+    print(f"{split}: {top.height:,} pairs for the raw-name reranker", flush=True)
+
+
+def rr_join(split: str):
+    """feat_noaddr2r_<split> + reranker scores (normalized/ce_<split>_nar.parquet) -> feat_noaddr2rq_<split>."""
+    src = TAGV[:-1]
+    keep = list(dict.fromkeys(["rec", "s1"] + [c for c in COLS if c not in NAR] + (["label"] if split != "test" else [])))   # only what the model uses
+    f = pl.read_parquet(NORM / f"feat_noaddr{src}_{split}.parquet", columns=keep)
+    ce = pl.read_parquet(NORM / f"ce_{split}_nar.parquet").rename({"ce_score": "nar_score"}).with_columns(pl.col("nar_score").cast(pl.Float32))
+    f = f.join(ce, on=["rec", "s1"], how="left").with_columns((pl.col("nar_score").max().over("rec") - pl.col("nar_score")).alias("nar_gap"),
+                                                             pl.col("nar_score").rank("min", descending=True).over("rec").alias("nar_rank"))
+    f.write_parquet(NORM / f"feat_noaddr{TAGV}_{split}.parquet")
+    print(f"{split}: reranker scores joined ({f['nar_score'].is_not_null().sum():,} of {f.height:,} pairs) -> feat_noaddr{TAGV}_{split}.parquet", flush=True)
 
 
 def s1_name_counts(prefix: str) -> pl.DataFrame:
@@ -422,4 +453,4 @@ def fit():
 
 
 if __name__ == "__main__":
-    {"raw": lambda: add_raw(sys.argv[2]), "features": lambda: build(sys.argv[2]), "fit": fit, "stage_a": lambda: stage_a(sys.argv[2]), "fit_b": fit_b, "joint": joint, "apply": apply, "trainall_queries": trainall_queries, "regular_sparse": regular_sparse, "regular_dense": regular_dense}[sys.argv[1]]()
+    {"raw": lambda: add_raw(sys.argv[2]), "rr_pairs": lambda: rr_pairs(sys.argv[2]), "rr_join": lambda: rr_join(sys.argv[2]), "features": lambda: build(sys.argv[2]), "fit": fit, "stage_a": lambda: stage_a(sys.argv[2]), "fit_b": fit_b, "joint": joint, "apply": apply, "trainall_queries": trainall_queries, "regular_sparse": regular_sparse, "regular_dense": regular_dense}[sys.argv[1]]()
